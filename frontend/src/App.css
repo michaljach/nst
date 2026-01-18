@@ -266,6 +266,23 @@ header h1 {
   box-shadow: 0 6px 16px rgba(255, 107, 107, 0.3);
 }
 
+.faucet-card {
+  border: 2px dashed rgba(255, 193, 7, 0.5);
+  background: rgba(255, 193, 7, 0.05);
+}
+
+.faucet-card h2 {
+  color: #ffc107;
+}
+
+.faucet-btn {
+  background: linear-gradient(135deg, #ffc107, #ff9800);
+}
+
+.faucet-btn:hover:not(:disabled) {
+  box-shadow: 0 6px 16px rgba(255, 193, 7, 0.3);
+}
+
 .reputation-card .rep-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

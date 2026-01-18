@@ -234,21 +234,28 @@ parameter_types! {
     pub const UbiAmount: u128 = 100_000_000_000; // 100 tokens with 9 decimals
     
     /// Number of blocks in one claim period (~1 day with 6s blocks)
-    pub const ClaimPeriodBlocks: BlockNumber = 14_400;
+    /// For dev/testing: 10 blocks
+    pub const ClaimPeriodBlocks: BlockNumber = 10;
     
     /// Number of blocks until tokens expire (~7 days)
-    pub const ExpirationBlocks: BlockNumber = 100_800;
+    /// For dev/testing: 70 blocks
+    pub const ExpirationBlocks: BlockNumber = 70;
     
     /// Maximum number of claim periods that can be claimed as backlog
     pub const MaxBacklogPeriods: u32 = 3;
+
+    /// Amount of native tokens given by faucet (enough for many transactions)
+    pub const FaucetAmount: Balance = 1_000_000_000_000_000; // 1000 units
 }
 
 impl pallet_ubi_token::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type NativeCurrency = Balances;
     type UbiAmount = UbiAmount;
     type ClaimPeriodBlocks = ClaimPeriodBlocks;
     type ExpirationBlocks = ExpirationBlocks;
     type MaxBacklogPeriods = MaxBacklogPeriods;
+    type FaucetAmount = FaucetAmount;
 }
 
 // ============================================================================

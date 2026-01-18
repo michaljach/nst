@@ -30,6 +30,8 @@ function App() {
   const [claimableAmount, setClaimableAmount] = useState<string>('0');
   const [canClaim, setCanClaim] = useState(false);
   const [reputation, setReputation] = useState<Reputation | null>(null);
+  const [nativeBalance, setNativeBalance] = useState<string>('0');
+  const [faucetUsed, setFaucetUsed] = useState(false);
   
   // Burn form
   const [burnRecipient, setBurnRecipient] = useState('');
@@ -86,15 +88,18 @@ function App() {
 
   // Fetch account data
   const fetchAccountData = useCallback(async () => {
-    if (!api || !selectedAccount) return;
+    if (!api || !selectedAccount || blockNumber === 0) return;
     
     try {
+      console.log('Fetching data for account:', selectedAccount, 'at block:', blockNumber);
+      
       // Get token batches
       const balances = await api.query.ubiToken.balances(selectedAccount);
+      console.log('Raw balances:', balances.toJSON());
       const batchesRaw = balances.toJSON() as any[];
       const batches: TokenBatch[] = batchesRaw?.map((b: any) => ({
         amount: b.amount?.toString() || '0',
-        expiresAtBlock: b.expiresAtBlock || 0,
+        expiresAtBlock: b.expiresAt || b.expiresAtBlock || 0,
       })) || [];
       setBalance(batches);
       
@@ -104,13 +109,31 @@ function App() {
         .reduce((sum, b) => sum + BigInt(b.amount), BigInt(0));
       setTotalBalance(total.toString());
       
-      // Check if can claim
-      const canClaimResult = await api.call.ubiTokenApi?.canClaim?.(selectedAccount);
-      setCanClaim((canClaimResult as any)?.isTrue || canClaimResult?.toJSON() === true || false);
+      // Check if can claim by reading LastClaim storage
+      // User can claim if they haven't claimed in the current period
+      const lastClaimBlock = await api.query.ubiToken.lastClaim(selectedAccount);
+      const lastClaim = lastClaimBlock.toJSON() as number | null;
+      console.log('Last claim block:', lastClaim);
       
-      // Get claimable amount
-      const claimable = await api.call.ubiTokenApi?.claimableAmount?.(selectedAccount);
-      setClaimableAmount(claimable?.toString() || '0');
+      // Get claim period from constants (default 10 blocks in dev)
+      const claimPeriod = 10; // TODO: read from runtime constants
+      
+      if (lastClaim === null) {
+        // Never claimed before - can claim
+        console.log('Never claimed - can claim now');
+        setCanClaim(true);
+        setClaimableAmount((100 * 10**12).toString()); // 100 tokens with 12 decimals
+      } else {
+        // Check if enough blocks have passed
+        const blocksSinceClaim = blockNumber - lastClaim;
+        const periodsClaimable = Math.floor(blocksSinceClaim / claimPeriod);
+        const canClaimNow = periodsClaimable > 0;
+        console.log('Blocks since claim:', blocksSinceClaim, 'Periods claimable:', periodsClaimable);
+        setCanClaim(canClaimNow);
+        // Cap at 3 periods (max backlog)
+        const periods = Math.min(periodsClaimable, 3);
+        setClaimableAmount((periods * 100 * 10**12).toString());
+      }
       
       // Get reputation
       const rep = await api.query.ubiToken.reputationStore(selectedAccount);
@@ -124,6 +147,18 @@ function App() {
           firstActivity: repJson.firstActivity || 0,
         });
       }
+      
+      // Get native balance for gas fees
+      const accountInfo = await api.query.system.account(selectedAccount);
+      const accountData = accountInfo.toJSON() as any;
+      const free = accountData?.data?.free || 0;
+      setNativeBalance(free.toString());
+      console.log('Native balance:', free);
+      
+      // Check if faucet was already used
+      const faucetUsedResult = await api.query.ubiToken.faucetUsed(selectedAccount);
+      setFaucetUsed(faucetUsedResult.toJSON() as boolean);
+      console.log('Faucet used:', faucetUsedResult.toJSON());
     } catch (err) {
       console.error('Error fetching data:', err);
     }
@@ -199,6 +234,40 @@ function App() {
     }
   };
 
+  // Request gas tokens from faucet (unsigned transaction)
+  const requestFaucet = async () => {
+    if (!api || !selectedAccount) return;
+    
+    setLoading(true);
+    setStatus('Requesting gas tokens from faucet...');
+    
+    try {
+      const tx = api.tx.ubiToken.faucet(selectedAccount);
+      
+      await tx.send(({ status, events }) => {
+        if (status.isInBlock) {
+          setStatus(`Faucet request included in block ${status.asInBlock.toHex()}`);
+          
+          // Check for events
+          events.forEach(({ event }) => {
+            if (api.events.ubiToken.FaucetReceived.is(event)) {
+              const [account, amount] = event.data;
+              console.log(`Faucet received: ${amount.toString()} by ${account.toString()}`);
+            }
+          });
+          
+          fetchAccountData();
+        } else if (status.isFinalized) {
+          setStatus('Faucet tokens received! You can now claim UBI.');
+          setLoading(false);
+        }
+      });
+    } catch (err) {
+      setStatus(`Faucet request failed: ${err}`);
+      setLoading(false);
+    }
+  };
+
   const formatTokens = (amount: string) => {
     const num = BigInt(amount);
     const whole = num / BigInt(10 ** 12);
@@ -238,6 +307,20 @@ function App() {
               ))}
             </select>
           </div>
+
+          {nativeBalance === '0' && !faucetUsed && (
+            <div className="card faucet-card">
+              <h2>Get Gas Tokens</h2>
+              <p>You need native tokens for transaction fees. Get free tokens from the faucet (one-time only).</p>
+              <button 
+                onClick={requestFaucet} 
+                disabled={loading}
+                className="action-btn faucet-btn"
+              >
+                {loading ? 'Processing...' : 'Get Free Gas Tokens'}
+              </button>
+            </div>
+          )}
 
           <div className="card balance-card">
             <h2>Your Balance</h2>
