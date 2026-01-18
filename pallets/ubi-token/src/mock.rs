@@ -15,14 +15,12 @@ type Block = frame_system::mocking::MockBlock<Test>;
 frame_support::construct_runtime!(
     pub enum Test {
         System: frame_system,
-        Balances: pallet_balances,
         UbiToken: pallet_ubi_token,
     }
 );
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
-    pub const ExistentialDeposit: u128 = 1;
 }
 
 #[derive_impl(frame_system::config_preludes::TestDefaultConfig)]
@@ -43,7 +41,7 @@ impl frame_system::Config for Test {
     type BlockHashCount = ConstU64<250>;
     type Version = ();
     type PalletInfo = PalletInfo;
-    type AccountData = pallet_balances::AccountData<u128>;
+    type AccountData = ();
     type OnNewAccount = ();
     type OnKilledAccount = ();
     type SystemWeightInfo = ();
@@ -52,39 +50,19 @@ impl frame_system::Config for Test {
     type MaxConsumers = ConstU32<16>;
 }
 
-impl pallet_balances::Config for Test {
-    type Balance = u128;
-    type DustRemoval = ();
-    type RuntimeEvent = RuntimeEvent;
-    type ExistentialDeposit = ExistentialDeposit;
-    type AccountStore = System;
-    type WeightInfo = ();
-    type MaxLocks = ConstU32<50>;
-    type MaxReserves = ConstU32<50>;
-    type ReserveIdentifier = [u8; 8];
-    type RuntimeHoldReason = ();
-    type RuntimeFreezeReason = ();
-    type FreezeIdentifier = ();
-    type MaxFreezes = ConstU32<0>;
-    type DoneSlashHandler = ();
-}
-
 parameter_types! {
     pub const UbiAmount: u128 = 100;           // 100 tokens per claim period
     pub const ClaimPeriodBlocks: u64 = 100;    // 100 blocks = 1 day (for testing)
     pub const ExpirationBlocks: u64 = 700;     // 700 blocks = 7 days (for testing)
     pub const MaxBacklogPeriods: u32 = 3;      // Can claim up to 3 days backlog
-    pub const FaucetAmount: u128 = 1000;       // 1000 native tokens for faucet
 }
 
 impl pallet_ubi_token::Config for Test {
     type RuntimeEvent = RuntimeEvent;
-    type NativeCurrency = Balances;
     type UbiAmount = UbiAmount;
     type ClaimPeriodBlocks = ClaimPeriodBlocks;
     type ExpirationBlocks = ExpirationBlocks;
     type MaxBacklogPeriods = MaxBacklogPeriods;
-    type FaucetAmount = FaucetAmount;
 }
 
 // Test accounts

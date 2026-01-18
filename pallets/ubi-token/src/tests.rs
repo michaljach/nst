@@ -1,4 +1,4 @@
-use crate::{mock::*, Error, Event, Balances as UbiBalances, LastClaim, ReputationStore, TotalSupply, Pallet};
+use crate::{mock::*, Error, Event, Balances, LastClaim, ReputationStore, TotalSupply, Pallet};
 use frame_support::{assert_noop, assert_ok};
 
 // ============================================================================
@@ -229,7 +229,7 @@ fn burn_uses_fifo() {
         assert_eq!(UbiToken::spendable_balance(&ALICE), 50);
 
         // Check batches - should have 1 batch with 50
-        let batches = UbiBalances::<Test>::get(ALICE);
+        let batches = Balances::<Test>::get(ALICE);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].amount, 50);
     });

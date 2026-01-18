@@ -243,19 +243,14 @@ parameter_types! {
     
     /// Maximum number of claim periods that can be claimed as backlog
     pub const MaxBacklogPeriods: u32 = 3;
-
-    /// Amount of native tokens given by faucet (enough for many transactions)
-    pub const FaucetAmount: Balance = 1_000_000_000_000_000; // 1000 units
 }
 
 impl pallet_ubi_token::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type NativeCurrency = Balances;
     type UbiAmount = UbiAmount;
     type ClaimPeriodBlocks = ClaimPeriodBlocks;
     type ExpirationBlocks = ExpirationBlocks;
     type MaxBacklogPeriods = MaxBacklogPeriods;
-    type FaucetAmount = FaucetAmount;
 }
 
 // ============================================================================

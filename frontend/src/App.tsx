@@ -30,8 +30,6 @@ function App() {
   const [claimableAmount, setClaimableAmount] = useState<string>('0');
   const [canClaim, setCanClaim] = useState(false);
   const [reputation, setReputation] = useState<Reputation | null>(null);
-  const [nativeBalance, setNativeBalance] = useState<string>('0');
-  const [faucetUsed, setFaucetUsed] = useState(false);
   
   // Burn form
   const [burnRecipient, setBurnRecipient] = useState('');
@@ -147,18 +145,6 @@ function App() {
           firstActivity: repJson.firstActivity || 0,
         });
       }
-      
-      // Get native balance for gas fees
-      const accountInfo = await api.query.system.account(selectedAccount);
-      const accountData = accountInfo.toJSON() as any;
-      const free = accountData?.data?.free || 0;
-      setNativeBalance(free.toString());
-      console.log('Native balance:', free);
-      
-      // Check if faucet was already used
-      const faucetUsedResult = await api.query.ubiToken.faucetUsed(selectedAccount);
-      setFaucetUsed(faucetUsedResult.toJSON() as boolean);
-      console.log('Faucet used:', faucetUsedResult.toJSON());
     } catch (err) {
       console.error('Error fetching data:', err);
     }
@@ -168,7 +154,7 @@ function App() {
     fetchAccountData();
   }, [fetchAccountData]);
 
-  // Claim UBI
+  // Claim UBI (FREE - no gas fees required)
   const claimUBI = async () => {
     if (!api || !selectedAccount) return;
     
@@ -195,7 +181,7 @@ function App() {
     }
   };
 
-  // Burn tokens
+  // Burn tokens (FREE - no gas fees required)
   const burnTokens = async () => {
     if (!api || !selectedAccount || !burnRecipient || !burnAmount) return;
     
@@ -230,40 +216,6 @@ function App() {
         });
     } catch (err) {
       setStatus(`Burn failed: ${err}`);
-      setLoading(false);
-    }
-  };
-
-  // Request gas tokens from faucet (unsigned transaction)
-  const requestFaucet = async () => {
-    if (!api || !selectedAccount) return;
-    
-    setLoading(true);
-    setStatus('Requesting gas tokens from faucet...');
-    
-    try {
-      const tx = api.tx.ubiToken.faucet(selectedAccount);
-      
-      await tx.send(({ status, events }) => {
-        if (status.isInBlock) {
-          setStatus(`Faucet request included in block ${status.asInBlock.toHex()}`);
-          
-          // Check for events
-          events.forEach(({ event }) => {
-            if (api.events.ubiToken.FaucetReceived.is(event)) {
-              const [account, amount] = event.data;
-              console.log(`Faucet received: ${amount.toString()} by ${account.toString()}`);
-            }
-          });
-          
-          fetchAccountData();
-        } else if (status.isFinalized) {
-          setStatus('Faucet tokens received! You can now claim UBI.');
-          setLoading(false);
-        }
-      });
-    } catch (err) {
-      setStatus(`Faucet request failed: ${err}`);
       setLoading(false);
     }
   };
@@ -308,20 +260,6 @@ function App() {
             </select>
           </div>
 
-          {nativeBalance === '0' && !faucetUsed && (
-            <div className="card faucet-card">
-              <h2>Get Gas Tokens</h2>
-              <p>You need native tokens for transaction fees. Get free tokens from the faucet (one-time only).</p>
-              <button 
-                onClick={requestFaucet} 
-                disabled={loading}
-                className="action-btn faucet-btn"
-              >
-                {loading ? 'Processing...' : 'Get Free Gas Tokens'}
-              </button>
-            </div>
-          )}
-
           <div className="card balance-card">
             <h2>Your Balance</h2>
             <div className="balance-amount">{formatTokens(totalBalance)} NST</div>
@@ -351,7 +289,7 @@ function App() {
 
           <div className="card claim-card">
             <h2>Claim UBI</h2>
-            <p>Receive 100 NST/day (expires in 7 days)</p>
+            <p>Receive 100 NST/day (expires in 7 days) - FREE, no gas fees!</p>
             <div className="claim-info">
               <span>Claimable: {formatTokens(claimableAmount)} NST</span>
             </div>
@@ -366,7 +304,7 @@ function App() {
 
           <div className="card burn-card">
             <h2>Burn Tokens</h2>
-            <p>Send tokens to someone (tokens are destroyed, recipient sees event)</p>
+            <p>Send tokens to someone (tokens are destroyed, recipient sees event) - FREE!</p>
             <div className="form-group">
               <label>Recipient Address:</label>
               <input
@@ -433,7 +371,7 @@ function App() {
 
       <footer>
         <p>NST - Non Speculative Tokens</p>
-        <p className="small">Tokens cannot be transferred, only burned. No speculation possible.</p>
+        <p className="small">Tokens cannot be transferred, only burned. No speculation possible. All transactions are FREE!</p>
       </footer>
     </div>
   );

@@ -46,9 +46,7 @@ mod tests;
 
 use frame_support::pallet_prelude::*;
 use frame_support::dispatch::{DispatchResultWithPostInfo, Pays};
-use frame_support::traits::Currency;
 use frame_system::pallet_prelude::*;
-use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_runtime::traits::{CheckedAdd, CheckedSub, Saturating, Zero};
@@ -93,9 +91,6 @@ pub mod pallet {
         /// The overarching event type
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-        /// The native currency for gas fees
-        type NativeCurrency: Currency<Self::AccountId>;
-
         /// Amount of tokens distributed per claim period (daily UBI)
         #[pallet::constant]
         type UbiAmount: Get<u128>;
@@ -111,10 +106,6 @@ pub mod pallet {
         /// Maximum number of claim periods that can be claimed as backlog
         #[pallet::constant]
         type MaxBacklogPeriods: Get<u32>;
-
-        /// Amount of native tokens given by faucet (for gas fees)
-        #[pallet::constant]
-        type FaucetAmount: Get<<<Self as Config>::NativeCurrency as Currency<Self::AccountId>>::Balance>;
     }
 
     /// Token balances stored as batches with expiration
@@ -145,11 +136,6 @@ pub mod pallet {
     #[pallet::getter(fn total_supply)]
     pub type TotalSupply<T: Config> = StorageValue<_, u128, ValueQuery>;
 
-    /// Tracks accounts that have used the faucet (one-time only)
-    #[pallet::storage]
-    #[pallet::getter(fn faucet_used)]
-    pub type FaucetUsed<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, bool, ValueQuery>;
-
     /// Events emitted by this pallet
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -172,11 +158,6 @@ pub mod pallet {
             who: T::AccountId,
             amount: u128,
         },
-        /// Native tokens received from faucet (for gas fees)
-        FaucetReceived {
-            who: T::AccountId,
-            amount: <<T as Config>::NativeCurrency as Currency<T::AccountId>>::Balance,
-        },
     }
 
     /// Errors that can occur in this pallet
@@ -194,8 +175,6 @@ pub mod pallet {
         TooManyBatches,
         /// Arithmetic overflow
         Overflow,
-        /// Faucet already used by this account
-        FaucetAlreadyUsed,
     }
 
     #[pallet::call]
@@ -303,6 +282,8 @@ pub mod pallet {
         /// - Sender: burns_sent increases
         /// - Recipient: burns_received increases
         ///
+        /// This transaction is FREE (no gas fees required).
+        ///
         /// # Arguments
         /// - `to`: The recipient address (for reputation tracking and event)
         /// - `amount`: Number of tokens to burn
@@ -313,7 +294,7 @@ pub mod pallet {
         /// - `InsufficientBalance` if you don't have enough tokens
         #[pallet::call_index(1)]
         #[pallet::weight(Weight::from_parts(10_000, 0) + T::DbWeight::get().reads_writes(4, 4))]
-        pub fn burn(origin: OriginFor<T>, to: T::AccountId, amount: u128) -> DispatchResult {
+        pub fn burn(origin: OriginFor<T>, to: T::AccountId, amount: u128) -> DispatchResultWithPostInfo {
             let from = ensure_signed(origin)?;
 
             // Validation
@@ -359,57 +340,8 @@ pub mod pallet {
 
             Self::deposit_event(Event::Burned { from, to, amount });
 
-            Ok(())
-        }
-
-        /// Get free native tokens for gas fees (one-time only)
-        ///
-        /// This is an UNSIGNED transaction that allows new users to bootstrap
-        /// their account with native tokens for gas fees. Each account can only
-        /// use this once.
-        ///
-        /// Since it's unsigned, no existing balance is required.
-        #[pallet::call_index(2)]
-        #[pallet::weight(Weight::from_parts(10_000, 0) + T::DbWeight::get().reads_writes(1, 2))]
-        pub fn faucet(origin: OriginFor<T>, account: T::AccountId) -> DispatchResult {
-            ensure_none(origin)?;
-
-            // Check if faucet already used
-            ensure!(!FaucetUsed::<T>::get(&account), Error::<T>::FaucetAlreadyUsed);
-
-            // Mark faucet as used
-            FaucetUsed::<T>::insert(&account, true);
-
-            // Mint native tokens to the account
-            let amount = T::FaucetAmount::get();
-            let _ = T::NativeCurrency::deposit_creating(&account, amount);
-
-            Self::deposit_event(Event::FaucetReceived { who: account, amount });
-
-            Ok(())
-        }
-    }
-
-    #[pallet::validate_unsigned]
-    impl<T: Config> ValidateUnsigned for Pallet<T> {
-        type Call = Call<T>;
-
-        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-            match call {
-                Call::faucet { account } => {
-                    // Only allow if faucet hasn't been used
-                    if FaucetUsed::<T>::get(account) {
-                        return InvalidTransaction::Custom(1).into();
-                    }
-                    
-                    ValidTransaction::with_tag_prefix("UbiFaucet")
-                        .and_provides(account)
-                        .longevity(3)
-                        .propagate(true)
-                        .build()
-                }
-                _ => InvalidTransaction::Call.into(),
-            }
+            // Return Pays::No to make this transaction FREE
+            Ok(Pays::No.into())
         }
     }
 

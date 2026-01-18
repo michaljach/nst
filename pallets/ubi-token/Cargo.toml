@@ -21,7 +21,6 @@ sp-std = { workspace = true }
 [dev-dependencies]
 sp-core = { workspace = true, default-features = true }
 sp-io = { workspace = true, default-features = true }
-pallet-balances = { workspace = true, default-features = true }
 
 [features]
 default = ["std"]
