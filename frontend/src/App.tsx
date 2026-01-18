@@ -16,6 +16,12 @@ interface Reputation {
   burnCount: number;
   receiveCount: number;
   firstActivity: number;
+  // New fields
+  weightedReceived: string;
+  uniqueRecipientsCount: number;
+  claimStreak: number;
+  lastClaimPeriod: number;
+  score: string;
 }
 
 interface BlockInfo {
@@ -314,14 +320,23 @@ function App() {
       // Get reputation
       const rep = await api.query.ubiToken.reputationStore(selectedAccount);
       const repJson = rep.toJSON() as any;
-      console.log('Reputation raw:', repJson);
+      console.log('Reputation raw:', JSON.stringify(repJson, null, 2));
       if (repJson) {
+        const score = repJson.score ?? 0;
+        const weightedReceived = repJson.weightedReceived ?? repJson.weighted_received ?? 0;
+        
         setReputation({
-          totalBurned: (repJson.burnsSentVolume ?? repJson.burns_sent_volume ?? '0').toString(),
-          totalReceived: (repJson.burnsReceivedVolume ?? repJson.burns_received_volume ?? '0').toString(),
+          totalBurned: (repJson.burnsSentVolume ?? repJson.burns_sent_volume ?? 0).toString(),
+          totalReceived: (repJson.burnsReceivedVolume ?? repJson.burns_received_volume ?? 0).toString(),
           burnCount: repJson.burnsSentCount ?? repJson.burns_sent_count ?? 0,
           receiveCount: repJson.burnsReceivedCount ?? repJson.burns_received_count ?? 0,
           firstActivity: repJson.firstActivity ?? repJson.first_activity ?? 0,
+          // New fields
+          weightedReceived: weightedReceived.toString(),
+          uniqueRecipientsCount: repJson.uniqueRecipientsCount ?? repJson.unique_recipients_count ?? 0,
+          claimStreak: repJson.claimStreak ?? repJson.claim_streak ?? 0,
+          lastClaimPeriod: repJson.lastClaimPeriod ?? repJson.last_claim_period ?? 0,
+          score: score.toString(),
         });
       }
     } catch (err) {
@@ -405,12 +420,18 @@ function App() {
     return whole.toString();
   };
 
-  // Calculate reputation score based on volume
-  // Receiving valued 2x - reputation is earned by being useful to others
-  const calculateReputationScore = (rep: Reputation): number => {
-    const burned = Number(BigInt(rep.totalBurned) / BigInt(10 ** 9));
-    const received = Number(BigInt(rep.totalReceived) / BigInt(10 ** 9));
-    return burned + (received * 2);
+  // Get on-chain reputation score (now calculated by the pallet)
+  const getReputationScore = (rep: Reputation): number => {
+    try {
+      // Handle both string and number formats
+      const scoreValue = rep.score;
+      if (typeof scoreValue === 'string') {
+        return Number(scoreValue) || 0;
+      }
+      return Number(scoreValue) || 0;
+    } catch {
+      return 0;
+    }
   };
 
   // Get reputation label based on score
@@ -570,17 +591,25 @@ function App() {
             <div className="card reputation-card">
               <h2>Your Reputation</h2>
               <div className="reputation-score">
-                <span className="score-value">{calculateReputationScore(reputation)}</span>
-                <span className="score-label">{getReputationLabel(calculateReputationScore(reputation))}</span>
+                <span className="score-value">{getReputationScore(reputation)}</span>
+                <span className="score-label">{getReputationLabel(getReputationScore(reputation))}</span>
               </div>
               <div className="rep-grid">
+                <div className="rep-item">
+                  <span className="rep-value">{reputation.claimStreak}</span>
+                  <span className="rep-label">Claim Streak</span>
+                </div>
+                <div className="rep-item">
+                  <span className="rep-value">{reputation.uniqueRecipientsCount}</span>
+                  <span className="rep-label">Unique Recipients</span>
+                </div>
                 <div className="rep-item">
                   <span className="rep-value">{formatTokens(reputation.totalBurned)}</span>
                   <span className="rep-label">Total Burned</span>
                 </div>
                 <div className="rep-item">
-                  <span className="rep-value">{formatTokens(reputation.totalReceived)}</span>
-                  <span className="rep-label">Total Received</span>
+                  <span className="rep-value">{formatTokens(reputation.weightedReceived)}</span>
+                  <span className="rep-label">Weighted Received</span>
                 </div>
                 <div className="rep-item">
                   <span className="rep-value">{reputation.burnCount}</span>
@@ -589,10 +618,6 @@ function App() {
                 <div className="rep-item">
                   <span className="rep-value">{reputation.receiveCount}</span>
                   <span className="rep-label">Burns Received</span>
-                </div>
-                <div className="rep-item">
-                  <span className="rep-value">#{reputation.firstActivity || 'N/A'}</span>
-                  <span className="rep-label">First Activity Block</span>
                 </div>
               </div>
             </div>

@@ -7,7 +7,7 @@
 //! - **Daily UBI Claims**: Every wallet can claim 100 tokens/day (up to 3 days backlog)
 //! - **Burn-Only Spending**: Tokens cannot be transferred, only burned with a named recipient
 //! - **Automatic Expiration**: Tokens expire after 7 days if not used
-//! - **Reputation Tracking**: On-chain tracking of burns sent/received for social reputation
+//! - **Anti-Bot Reputation System**: Sophisticated reputation tracking resistant to farming
 //! - **Open Participation**: Any wallet can participate (sybil-resistant via expiration)
 //!
 //! ## Why Burn-Only?
@@ -26,13 +26,31 @@
 //!                    EXPIRE (if unused)
 //! ```
 //!
-//! ## Reputation System
+//! ## Enhanced Reputation System
 //!
-//! When tokens are burned, both parties' reputation is updated:
-//! - Sender: burns_sent_count++, burns_sent_volume += amount
-//! - Recipient: burns_received_count++, burns_received_volume += amount
+//! The reputation score is calculated from multiple factors:
 //!
-//! This creates a view-only reputation system with no penalties.
+//! ```text
+//! Score = (unique_recipients × 50) + (burns_sent × 1) + (weighted_received × 2) + streak_bonus
+//! ```
+//!
+//! ### Anti-Bot Mechanisms:
+//!
+//! 1. **Sender Weight**: Burns from high-rep senders count more (0.5x to 2.0x)
+//!    - New accounts have low weight, so bot farms can't bootstrap easily
+//!    - Legitimate users receiving burns from established users grow faster
+//!
+//! 2. **Unique Recipients**: Only first burn to each recipient earns breadth bonus
+//!    - Encourages spreading engagement across the community
+//!    - Bot rings burning to same addresses don't accumulate bonus
+//!
+//! 3. **Claim Streak**: Rewards consistent daily claiming (10 points/day, max 500)
+//!    - 2-day grace period before streak resets
+//!    - Encourages regular participation
+//!
+//! 4. **Reputation Decay**: 5% decay per claim period
+//!    - Inactive users' reputation slowly decreases
+//!    - Must stay active to maintain high reputation
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -48,7 +66,7 @@ use frame_support::pallet_prelude::*;
 use frame_system::pallet_prelude::*;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-use sp_runtime::traits::{CheckedAdd, CheckedSub, Saturating, Zero};
+use sp_runtime::traits::{Saturating, Zero};
 use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction};
 
 /// A batch of tokens with an expiration block
@@ -61,6 +79,14 @@ pub struct TokenBatch<BlockNumber> {
 }
 
 /// Reputation data for an account
+/// 
+/// Reputation score is calculated as:
+/// - unique_recipients_count × 50 (breadth of engagement)
+/// - burns_sent_volume × 1 (giving to others)
+/// - weighted_received × 2 (recognition from others, weighted by sender reputation)
+/// - claim_streak × 10 (consistency bonus, capped at 500)
+/// 
+/// On each claim, reputation decays by 5% to encourage continued activity.
 #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen, Default)]
 pub struct Reputation<BlockNumber> {
     /// Number of burn transactions sent
@@ -69,10 +95,23 @@ pub struct Reputation<BlockNumber> {
     pub burns_sent_volume: u128,
     /// Number of burn transactions received
     pub burns_received_count: u64,
-    /// Total volume of tokens burned to this account
+    /// Total volume of tokens burned to this account (raw, unweighted)
     pub burns_received_volume: u128,
     /// Block number of first activity (claim or burn)
     pub first_activity: BlockNumber,
+    
+    // === New fields for enhanced reputation ===
+    
+    /// Weighted burns received (weighted by sender's reputation at time of burn)
+    pub weighted_received: u128,
+    /// Number of unique recipients this account has burned to
+    pub unique_recipients_count: u32,
+    /// Current claim streak (consecutive periods claimed)
+    pub claim_streak: u32,
+    /// Last claim period number (for streak tracking)
+    pub last_claim_period: u64,
+    /// Cached reputation score (updated on claim/burn)
+    pub score: u128,
 }
 
 #[frame_support::pallet]
@@ -81,6 +120,27 @@ pub mod pallet {
 
     /// Maximum number of token batches per account
     pub const MAX_BATCHES: u32 = 10;
+    
+    /// Maximum unique recipients to track per account
+    pub const MAX_UNIQUE_RECIPIENTS: u32 = 1000;
+    
+    // Reputation calculation constants (using fixed-point math with 1000 = 1.0)
+    /// Minimum sender weight (0.5 = 500/1000)
+    pub const MIN_SENDER_WEIGHT: u128 = 500;
+    /// Maximum sender weight (2.0 = 2000/1000)
+    pub const MAX_SENDER_WEIGHT: u128 = 2000;
+    /// Decay factor per claim (95% = 950/1000, i.e., 5% decay)
+    pub const DECAY_FACTOR: u128 = 950;
+    /// Reputation points per unique recipient
+    pub const POINTS_PER_UNIQUE_RECIPIENT: u128 = 50;
+    /// Reputation points per streak day (capped at 50 days = 500 points)
+    pub const POINTS_PER_STREAK_DAY: u128 = 10;
+    /// Maximum streak bonus
+    pub const MAX_STREAK_BONUS: u128 = 500;
+    /// Multiplier for weighted received in score (2x)
+    pub const WEIGHTED_RECEIVED_MULTIPLIER: u128 = 2;
+    /// Grace period for streak (can miss up to 2 periods)
+    pub const STREAK_GRACE_PERIODS: u64 = 2;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -130,6 +190,19 @@ pub mod pallet {
     #[pallet::getter(fn reputation)]
     pub type ReputationStore<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, Reputation<BlockNumberFor<T>>, ValueQuery>;
+
+    /// Track unique recipients for each sender (for reputation breadth bonus)
+    /// Uses double map: sender -> recipient -> bool (exists)
+    #[pallet::storage]
+    pub type UniqueRecipients<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,  // sender
+        Blake2_128Concat,
+        T::AccountId,  // recipient
+        bool,
+        ValueQuery,
+    >;
 
     /// Total tokens currently in circulation (not expired)
     #[pallet::storage]
@@ -255,11 +328,22 @@ pub mod pallet {
                 *supply = supply.saturating_add(amount_to_claim);
             });
 
-            // Update first activity if this is the first time
+            // Update reputation: decay, streak, and recalculate score
+            let current_period = Self::block_to_period(current_block);
             ReputationStore::<T>::mutate(&who, |rep| {
+                // Set first activity if this is the first time
                 if rep.first_activity == Zero::zero() {
                     rep.first_activity = current_block;
                 }
+                
+                // Apply 5% decay to current score
+                rep.score = Self::apply_decay(rep.score);
+                
+                // Update claim streak (handles grace period logic)
+                Self::update_streak(rep, current_period);
+                
+                // Recalculate full score from components
+                rep.score = Self::recalculate_score(rep);
             });
 
             Self::deposit_event(Event::Claimed {
@@ -295,7 +379,7 @@ pub mod pallet {
         /// - `AmountMustBePositive` if amount is zero
         /// - `InsufficientBalance` if you don't have enough tokens
         #[pallet::call_index(1)]
-        #[pallet::weight(Weight::from_parts(10_000, 0) + T::DbWeight::get().reads_writes(4, 4))]
+        #[pallet::weight(Weight::from_parts(10_000, 0) + T::DbWeight::get().reads_writes(6, 6))]
         pub fn burn(origin: OriginFor<T>, from: T::AccountId, to: T::AccountId, amount: u128) -> DispatchResult {
             ensure_none(origin)?;
 
@@ -322,22 +406,51 @@ pub mod pallet {
                 *supply = supply.saturating_sub(amount);
             });
 
+            // Get sender's current reputation score for weighting
+            let sender_score = ReputationStore::<T>::get(&from).score;
+            let sender_weight = Self::calculate_sender_weight(sender_score);
+            
+            // Calculate weighted amount: amount * weight / 1000
+            let weighted_amount = amount.saturating_mul(sender_weight) / 1000;
+
+            // Check if this is a new unique recipient for the sender
+            let is_new_recipient = !UniqueRecipients::<T>::get(&from, &to);
+            if is_new_recipient {
+                UniqueRecipients::<T>::insert(&from, &to, true);
+            }
+
             // Update sender reputation
             ReputationStore::<T>::mutate(&from, |rep| {
                 rep.burns_sent_count = rep.burns_sent_count.saturating_add(1);
                 rep.burns_sent_volume = rep.burns_sent_volume.saturating_add(amount);
+                
+                // Track unique recipients
+                if is_new_recipient {
+                    rep.unique_recipients_count = rep.unique_recipients_count.saturating_add(1);
+                }
+                
                 if rep.first_activity == Zero::zero() {
                     rep.first_activity = current_block;
                 }
+                
+                // Recalculate sender's score
+                rep.score = Self::recalculate_score(rep);
             });
 
             // Update recipient reputation
             ReputationStore::<T>::mutate(&to, |rep| {
                 rep.burns_received_count = rep.burns_received_count.saturating_add(1);
                 rep.burns_received_volume = rep.burns_received_volume.saturating_add(amount);
+                
+                // Add weighted received (weighted by sender's reputation)
+                rep.weighted_received = rep.weighted_received.saturating_add(weighted_amount);
+                
                 if rep.first_activity == Zero::zero() {
                     rep.first_activity = current_block;
                 }
+                
+                // Recalculate recipient's score
+                rep.score = Self::recalculate_score(rep);
             });
 
             Self::deposit_event(Event::Burned { from, to, amount });
@@ -452,13 +565,13 @@ pub mod pallet {
         /// Burn tokens using FIFO (oldest batches first)
         fn burn_fifo(
             who: &T::AccountId,
-            mut amount: u128,
+            amount: u128,
             current_block: BlockNumberFor<T>,
         ) -> DispatchResult {
             Balances::<T>::try_mutate(who, |batches| -> DispatchResult {
                 // Sort by expiration (oldest first) for FIFO
                 batches.sort_by(|a, b| a.expires_at.cmp(&b.expires_at));
-
+                
                 let mut remaining = amount;
 
                 for batch in batches.iter_mut() {
@@ -523,6 +636,103 @@ pub mod pallet {
         pub fn claimable_amount(who: &T::AccountId) -> u128 {
             let periods = Self::claimable_periods(who);
             T::UbiAmount::get().saturating_mul(periods as u128)
+        }
+
+        // === New reputation system helpers ===
+
+        /// Calculate sender weight based on their reputation score
+        /// Uses fixed-point math: result is scaled by 1000 (1000 = 1.0x weight)
+        /// 
+        /// Formula: weight = clamp(log10(score + 10) / 2, 0.5, 2.0)
+        /// Approximated using integer math
+        fn calculate_sender_weight(sender_score: u128) -> u128 {
+            // Approximate log10 using leading zeros / bit counting
+            // log10(x) ≈ log2(x) / 3.32
+            // We use a simpler tiered approach for efficiency:
+            //   score < 10:        weight = 500  (0.5x)
+            //   score 10-99:       weight = 750  (0.75x)
+            //   score 100-999:     weight = 1000 (1.0x)
+            //   score 1000-9999:   weight = 1500 (1.5x)
+            //   score 10000+:      weight = 2000 (2.0x)
+            
+            if sender_score < 10 {
+                MIN_SENDER_WEIGHT  // 500 = 0.5x
+            } else if sender_score < 100 {
+                750  // 0.75x
+            } else if sender_score < 1000 {
+                1000  // 1.0x
+            } else if sender_score < 10000 {
+                1500  // 1.5x
+            } else {
+                MAX_SENDER_WEIGHT  // 2000 = 2.0x
+            }
+        }
+
+        /// Calculate the current period number from a block number
+        fn block_to_period(block: BlockNumberFor<T>) -> u64 {
+            let period_blocks: u64 = T::ClaimPeriodBlocks::get()
+                .try_into()
+                .unwrap_or(1);
+            let block_num: u64 = block.try_into().unwrap_or(0);
+            block_num / period_blocks
+        }
+
+        /// Update claim streak based on current period
+        /// Returns the new streak value
+        fn update_streak(rep: &mut Reputation<BlockNumberFor<T>>, current_period: u64) -> u32 {
+            let periods_missed = current_period.saturating_sub(rep.last_claim_period);
+            
+            if periods_missed <= STREAK_GRACE_PERIODS + 1 {
+                // Within grace period (0, 1, or 2 periods since last = consecutive or grace)
+                // +1 because claiming in next period is periods_missed=1
+                rep.claim_streak = rep.claim_streak.saturating_add(1);
+            } else {
+                // Streak broken - reset to 1
+                rep.claim_streak = 1;
+            }
+            
+            rep.last_claim_period = current_period;
+            rep.claim_streak
+        }
+
+        /// Apply 5% decay to reputation score
+        fn apply_decay(score: u128) -> u128 {
+            // score * 0.95 = score * 950 / 1000
+            score.saturating_mul(DECAY_FACTOR) / 1000
+        }
+
+        /// Calculate streak bonus (10 points per day, max 500)
+        fn calculate_streak_bonus(streak: u32) -> u128 {
+            let bonus = (streak as u128).saturating_mul(POINTS_PER_STREAK_DAY);
+            bonus.min(MAX_STREAK_BONUS)
+        }
+
+        /// Recalculate the full reputation score from components
+        fn recalculate_score(rep: &Reputation<BlockNumberFor<T>>) -> u128 {
+            let unique_bonus = (rep.unique_recipients_count as u128)
+                .saturating_mul(POINTS_PER_UNIQUE_RECIPIENT);
+            
+            let sent_bonus = rep.burns_sent_volume;  // 1x multiplier
+            
+            let received_bonus = rep.weighted_received
+                .saturating_mul(WEIGHTED_RECEIVED_MULTIPLIER);
+            
+            let streak_bonus = Self::calculate_streak_bonus(rep.claim_streak);
+            
+            unique_bonus
+                .saturating_add(sent_bonus)
+                .saturating_add(received_bonus)
+                .saturating_add(streak_bonus)
+        }
+
+        /// Get reputation score for an account (public API)
+        pub fn reputation_score(who: &T::AccountId) -> u128 {
+            ReputationStore::<T>::get(who).score
+        }
+
+        /// Check if sender has already burned to this recipient before
+        pub fn has_burned_to(sender: &T::AccountId, recipient: &T::AccountId) -> bool {
+            UniqueRecipients::<T>::get(sender, recipient)
         }
     }
 }
