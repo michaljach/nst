@@ -45,11 +45,11 @@ mod mock;
 mod tests;
 
 use frame_support::pallet_prelude::*;
-use frame_support::dispatch::{DispatchResultWithPostInfo, Pays};
 use frame_system::pallet_prelude::*;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_runtime::traits::{CheckedAdd, CheckedSub, Saturating, Zero};
+use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction};
 
 /// A batch of tokens with an expiration block
 #[derive(Clone, Encode, Decode, Eq, PartialEq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
@@ -179,22 +179,23 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        /// Claim your daily UBI tokens
+        /// Claim your daily UBI tokens (UNSIGNED - no gas fees!)
         ///
         /// Each wallet can claim once per period (default: 1 day).
         /// If you miss days, you can claim up to 3 periods of backlog.
         /// Claimed tokens expire after 7 days if not used.
         ///
-        /// This transaction is FREE (no gas fees required) to allow new users
-        /// to claim their first UBI without needing any existing tokens.
+        /// This is an UNSIGNED transaction - anyone can submit it without paying fees.
+        /// The `account` parameter specifies who receives the UBI.
         ///
         /// # Errors
         /// - `NothingToClaim` if you've already claimed this period and have no backlog
         #[pallet::call_index(0)]
         #[pallet::weight(Weight::from_parts(10_000, 0) + T::DbWeight::get().reads_writes(3, 3))]
-        pub fn claim(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
-            let who = ensure_signed(origin)?;
+        pub fn claim(origin: OriginFor<T>, account: T::AccountId) -> DispatchResult {
+            ensure_none(origin)?;
 
+            let who = account;
             let current_block = frame_system::Pallet::<T>::block_number();
             let _claim_period = T::ClaimPeriodBlocks::get();
             let ubi_amount = T::UbiAmount::get();
@@ -268,11 +269,10 @@ pub mod pallet {
                 expires_at,
             });
 
-            // Return Pays::No to make this transaction FREE
-            Ok(Pays::No.into())
+            Ok(())
         }
 
-        /// Burn tokens to a recipient (make a payment)
+        /// Burn tokens to a recipient (UNSIGNED - no gas fees!)
         ///
         /// This is the ONLY way to "spend" tokens. The recipient does not
         /// receive any tokens - they only see the burn event. This prevents
@@ -282,9 +282,11 @@ pub mod pallet {
         /// - Sender: burns_sent increases
         /// - Recipient: burns_received increases
         ///
-        /// This transaction is FREE (no gas fees required).
+        /// This is an UNSIGNED transaction - anyone can submit it without paying fees.
+        /// The `from` parameter specifies who is burning tokens.
         ///
         /// # Arguments
+        /// - `from`: The sender address (who is burning tokens)
         /// - `to`: The recipient address (for reputation tracking and event)
         /// - `amount`: Number of tokens to burn
         ///
@@ -294,8 +296,8 @@ pub mod pallet {
         /// - `InsufficientBalance` if you don't have enough tokens
         #[pallet::call_index(1)]
         #[pallet::weight(Weight::from_parts(10_000, 0) + T::DbWeight::get().reads_writes(4, 4))]
-        pub fn burn(origin: OriginFor<T>, to: T::AccountId, amount: u128) -> DispatchResultWithPostInfo {
-            let from = ensure_signed(origin)?;
+        pub fn burn(origin: OriginFor<T>, from: T::AccountId, to: T::AccountId, amount: u128) -> DispatchResult {
+            ensure_none(origin)?;
 
             // Validation
             ensure!(from != to, Error::<T>::CannotBurnToSelf);
@@ -340,8 +342,54 @@ pub mod pallet {
 
             Self::deposit_event(Event::Burned { from, to, amount });
 
-            // Return Pays::No to make this transaction FREE
-            Ok(Pays::No.into())
+            Ok(())
+        }
+    }
+
+    #[pallet::validate_unsigned]
+    impl<T: Config> ValidateUnsigned for Pallet<T> {
+        type Call = Call<T>;
+
+        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
+            match call {
+                Call::claim { account } => {
+                    // Validate that the account can actually claim
+                    let current_block = frame_system::Pallet::<T>::block_number();
+                    let claimable = Self::calculate_claimable_periods(account, current_block);
+                    
+                    if claimable == 0 {
+                        return InvalidTransaction::Custom(1).into();
+                    }
+                    
+                    ValidTransaction::with_tag_prefix("UbiClaim")
+                        .and_provides((account, current_block / T::ClaimPeriodBlocks::get()))
+                        .longevity(5)
+                        .propagate(true)
+                        .build()
+                }
+                Call::burn { from, to, amount } => {
+                    // Basic validation
+                    if from == to {
+                        return InvalidTransaction::Custom(2).into();
+                    }
+                    if *amount == 0 {
+                        return InvalidTransaction::Custom(3).into();
+                    }
+                    
+                    // Check balance
+                    let balance = Self::spendable_balance(from);
+                    if balance < *amount {
+                        return InvalidTransaction::Custom(4).into();
+                    }
+                    
+                    ValidTransaction::with_tag_prefix("UbiBurn")
+                        .and_provides((from, frame_system::Pallet::<T>::block_number()))
+                        .longevity(5)
+                        .propagate(true)
+                        .build()
+                }
+                _ => InvalidTransaction::Call.into(),
+            }
         }
     }
 

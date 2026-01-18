@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ApiPromise, WsProvider } from '@polkadot/api';
-import { web3Accounts, web3Enable, web3FromAddress } from '@polkadot/extension-dapp';
+import { web3Accounts, web3Enable } from '@polkadot/extension-dapp';
 import type { InjectedAccountWithMeta } from '@polkadot/extension-inject/types';
 import './App.css';
 
@@ -93,12 +93,16 @@ function App() {
       
       // Get token batches
       const balances = await api.query.ubiToken.balances(selectedAccount);
-      console.log('Raw balances:', balances.toJSON());
       const batchesRaw = balances.toJSON() as any[];
-      const batches: TokenBatch[] = batchesRaw?.map((b: any) => ({
-        amount: b.amount?.toString() || '0',
-        expiresAtBlock: b.expiresAt || b.expiresAtBlock || 0,
-      })) || [];
+      console.log('Raw balances:', JSON.stringify(batchesRaw, null, 2));
+      const batches: TokenBatch[] = batchesRaw?.map((b: any) => {
+        console.log('Batch item:', b);
+        return {
+          amount: (b.amount ?? b[0] ?? '0').toString(),
+          expiresAtBlock: b.expiresAt ?? b.expires_at ?? b[1] ?? 0,
+        };
+      }) || [];
+      console.log('Parsed batches:', batches);
       setBalance(batches);
       
       // Calculate total valid balance
@@ -120,7 +124,7 @@ function App() {
         // Never claimed before - can claim
         console.log('Never claimed - can claim now');
         setCanClaim(true);
-        setClaimableAmount((100 * 10**12).toString()); // 100 tokens with 12 decimals
+        setClaimableAmount((100 * 10**9).toString()); // 100 tokens with 9 decimals
       } else {
         // Check if enough blocks have passed
         const blocksSinceClaim = blockNumber - lastClaim;
@@ -130,19 +134,20 @@ function App() {
         setCanClaim(canClaimNow);
         // Cap at 3 periods (max backlog)
         const periods = Math.min(periodsClaimable, 3);
-        setClaimableAmount((periods * 100 * 10**12).toString());
+        setClaimableAmount((periods * 100 * 10**9).toString());
       }
       
       // Get reputation
       const rep = await api.query.ubiToken.reputationStore(selectedAccount);
       const repJson = rep.toJSON() as any;
+      console.log('Reputation raw:', repJson);
       if (repJson) {
         setReputation({
-          totalBurned: repJson.totalBurned?.toString() || '0',
-          totalReceived: repJson.totalReceived?.toString() || '0',
-          burnCount: repJson.burnCount || 0,
-          receiveCount: repJson.receiveCount || 0,
-          firstActivity: repJson.firstActivity || 0,
+          totalBurned: (repJson.burnsSentVolume ?? repJson.burns_sent_volume ?? '0').toString(),
+          totalReceived: (repJson.burnsReceivedVolume ?? repJson.burns_received_volume ?? '0').toString(),
+          burnCount: repJson.burnsSentCount ?? repJson.burns_sent_count ?? 0,
+          receiveCount: repJson.burnsReceivedCount ?? repJson.burns_received_count ?? 0,
+          firstActivity: repJson.firstActivity ?? repJson.first_activity ?? 0,
         });
       }
     } catch (err) {
@@ -154,7 +159,7 @@ function App() {
     fetchAccountData();
   }, [fetchAccountData]);
 
-  // Claim UBI (FREE - no gas fees required)
+  // Claim UBI (FREE - unsigned transaction, no wallet signature needed)
   const claimUBI = async () => {
     if (!api || !selectedAccount) return;
     
@@ -162,26 +167,32 @@ function App() {
     setStatus('Claiming UBI...');
     
     try {
-      const injector = await web3FromAddress(selectedAccount);
+      // Create the call
+      const tx = api.tx.ubiToken.claim(selectedAccount);
+      console.log('TX hex:', tx.toHex());
+      console.log('TX method:', tx.method.toHex());
       
-      await api.tx.ubiToken
-        .claim()
-        .signAndSend(selectedAccount, { signer: injector.signer }, ({ status }) => {
-          if (status.isInBlock) {
-            setStatus(`Claim included in block ${status.asInBlock.toHex()}`);
-            fetchAccountData();
-          } else if (status.isFinalized) {
-            setStatus('Claim finalized!');
-            setLoading(false);
-          }
-        });
-    } catch (err) {
-      setStatus(`Claim failed: ${err}`);
+      // Submit unsigned extrinsic via RPC
+      const hash = await api.rpc.author.submitExtrinsic(tx.toHex());
+      console.log('Submitted hash:', hash.toHex());
+      setStatus(`Claim submitted with hash: ${hash.toHex()}`);
+      
+      // Wait a bit and refresh
+      setTimeout(() => {
+        fetchAccountData();
+        setLoading(false);
+        setStatus('Claim processed!');
+      }, 6000);
+    } catch (err: any) {
+      console.error('Claim error:', err);
+      console.error('Error message:', err?.message);
+      console.error('Error data:', err?.data);
+      setStatus(`Claim failed: ${err?.message || err}`);
       setLoading(false);
     }
   };
 
-  // Burn tokens (FREE - no gas fees required)
+  // Burn tokens (FREE - unsigned transaction, no wallet signature needed)
   const burnTokens = async () => {
     if (!api || !selectedAccount || !burnRecipient || !burnAmount) return;
     
@@ -189,32 +200,26 @@ function App() {
     setStatus('Burning tokens...');
     
     try {
-      const injector = await web3FromAddress(selectedAccount);
-      const amount = BigInt(burnAmount) * BigInt(10 ** 12); // 12 decimals
+      const amount = BigInt(burnAmount) * BigInt(10 ** 9); // 9 decimals
       
-      await api.tx.ubiToken
-        .burn(burnRecipient, amount.toString())
-        .signAndSend(selectedAccount, { signer: injector.signer }, ({ status, events }) => {
-          if (status.isInBlock) {
-            setStatus(`Burn included in block ${status.asInBlock.toHex()}`);
-            
-            // Check for events
-            events.forEach(({ event }) => {
-              if (api.events.ubiToken.TokensBurned.is(event)) {
-                const [_sender, recipient, burnedAmount] = event.data;
-                setStatus(`Burned ${burnedAmount.toString()} tokens to ${recipient.toString()}`);
-              }
-            });
-            
-            fetchAccountData();
-            setBurnRecipient('');
-            setBurnAmount('');
-          } else if (status.isFinalized) {
-            setStatus('Burn finalized!');
-            setLoading(false);
-          }
-        });
+      // Create unsigned extrinsic and submit directly
+      const tx = api.tx.ubiToken.burn(selectedAccount, burnRecipient, amount.toString());
+      const extrinsic = api.createType('Extrinsic', tx);
+      
+      // Submit unsigned extrinsic via RPC
+      const hash = await api.rpc.author.submitExtrinsic(extrinsic);
+      setStatus(`Burn submitted with hash: ${hash.toHex()}`);
+      
+      // Wait a bit and refresh
+      setTimeout(() => {
+        fetchAccountData();
+        setBurnRecipient('');
+        setBurnAmount('');
+        setLoading(false);
+        setStatus('Burn processed!');
+      }, 6000);
     } catch (err) {
+      console.error('Burn error:', err);
       setStatus(`Burn failed: ${err}`);
       setLoading(false);
     }
@@ -222,8 +227,28 @@ function App() {
 
   const formatTokens = (amount: string) => {
     const num = BigInt(amount);
-    const whole = num / BigInt(10 ** 12);
+    const whole = num / BigInt(10 ** 9); // 9 decimals
     return whole.toString();
+  };
+
+  // Calculate reputation score based on volume
+  // Receiving valued 2x - reputation is earned by being useful to others
+  const calculateReputationScore = (rep: Reputation): number => {
+    const burned = Number(BigInt(rep.totalBurned) / BigInt(10 ** 9));
+    const received = Number(BigInt(rep.totalReceived) / BigInt(10 ** 9));
+    return burned + (received * 2);
+  };
+
+  // Get reputation label based on score
+  const getReputationLabel = (score: number): string => {
+    if (score === 0) return 'Newcomer';
+    if (score < 100) return 'Getting Started';
+    if (score < 500) return 'Active Member';
+    if (score < 2000) return 'Trusted Contributor';
+    if (score < 5000) return 'Community Pillar';
+    if (score < 10000) return 'Local Legend';
+    if (score < 25000) return 'Community Elder';
+    return 'Legend';
   };
 
   return (
@@ -336,6 +361,10 @@ function App() {
           {reputation && (
             <div className="card reputation-card">
               <h2>Your Reputation</h2>
+              <div className="reputation-score">
+                <span className="score-value">{calculateReputationScore(reputation)}</span>
+                <span className="score-label">{getReputationLabel(calculateReputationScore(reputation))}</span>
+              </div>
               <div className="rep-grid">
                 <div className="rep-item">
                   <span className="rep-value">{formatTokens(reputation.totalBurned)}</span>

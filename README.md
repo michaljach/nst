@@ -10,6 +10,7 @@ Traditional cryptocurrencies allow transfers, enabling speculation and trading. 
 - **Everyone receives UBI** - 100 NST per day
 - **Tokens expire** - unused tokens vanish after 7 days
 - **Burn = Payment** - burning tokens to an address is proof of payment
+- **All transactions are FREE** - no gas fees required
 
 ## Why It Works
 
@@ -30,9 +31,51 @@ NST:
 | **Daily UBI** | 100 NST/day for any wallet |
 | **Burn-Only** | No transfer function exists |
 | **7-Day Expiry** | Unspent tokens disappear |
-| **Reputation** | Track burns sent/received on-chain |
+| **Reputation** | Volume-based on-chain reputation |
+| **Free Transactions** | No gas fees - truly accessible |
 | **Open Access** | Any wallet can participate |
 | **Anti-Sybil** | Expiration makes hoarding pointless |
+
+## Reputation System
+
+Reputation is **volume-based** - it rewards actual economic value creation, not transaction frequency.
+
+### Formula
+
+```
+Reputation Score = Tokens Burned + (Tokens Received × 2)
+```
+
+**Why receiving is valued 2x more:**
+- Reputation is earned by **others choosing to pay you**
+- Being useful to the community matters more than spending
+- A pizza seller who receives 500 NST from customers has higher reputation than someone who just spends
+
+### Reputation Labels
+
+| Score | Label |
+|-------|-------|
+| 0 | Newcomer |
+| 100+ | Getting Started |
+| 500+ | Active Member |
+| 2,000+ | Trusted Contributor |
+| 5,000+ | Community Pillar |
+| 10,000+ | Local Legend |
+| 25,000+ | Community Elder |
+
+### Example
+
+```
+Pizza Seller (provides value):
+  - Receives 500 NST from customers
+  - Burns 100 NST on supplies
+  - Score: 100 + (500 × 2) = 1,100 (Trusted Contributor)
+
+Customer:
+  - Burns 500 NST on pizzas
+  - Receives 100 NST for odd jobs
+  - Score: 500 + (100 × 2) = 700 (Active Member)
+```
 
 ## Architecture
 
@@ -40,17 +83,17 @@ NST:
 ┌─────────────────────────────────────────────────────────────────┐
 │                         NST RUNTIME                             │
 ├─────────────────────────────────────────────────────────────────┤
-│  UBI Token Pallet                                               │
-│  ├── claim()           Claim daily UBI (up to 3 days backlog)   │
-│  ├── burn(to, amount)  Destroy tokens, emit event for recipient │
-│  └── [No transfer!]    Transfers do not exist                   │
+│  UBI Token Pallet (FREE - unsigned transactions)                │
+│  ├── claim(account)      Claim daily UBI (up to 3 days backlog) │
+│  ├── burn(from, to, amt) Destroy tokens, emit event for recipient│
+│  └── [No transfer!]      Transfers do not exist                 │
 ├─────────────────────────────────────────────────────────────────┤
-│  Reputation System (view-only)                                  │
-│  ├── burns_sent_count      How many payments made               │
-│  ├── burns_sent_volume     Total tokens burned                  │
-│  ├── burns_received_count  How many payments received           │
-│  ├── burns_received_volume Total tokens burned to this address  │
-│  └── first_activity        Account age (block number)           │
+│  Reputation System (view-only, volume-based)                    │
+│  ├── burns_sent_volume       Total tokens burned (given)        │
+│  ├── burns_received_volume   Total tokens burned to this address│
+│  ├── burns_sent_count        Number of payments made            │
+│  ├── burns_received_count    Number of payments received        │
+│  └── first_activity          Account age (block number)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -84,10 +127,10 @@ ALICE (customer)                    BOB (pizza shop)
      │ burn(bob, 50) ──────────────────► │ Sees burn event
      │ "50 NST burned for Bob"           │ "Alice burned 50 for me"
      │                                   │
-     │ ◄─────────────────────────────────│ Delivers pizza 🍕
+     │ ◄─────────────────────────────────│ Delivers pizza
      │                                   │
      │ Balance: 50 NST                   │ Balance: 100 NST (his own UBI)
-     │                                   │ Reputation: +1 burn, +50 volume
+     │ Reputation: +50 burned            │ Reputation: +100 received (+200 score)
 ```
 
 **Key insight:** Bob doesn't receive Alice's tokens. He only sees proof that she burned them for him. Bob has his own UBI for his needs.
@@ -105,14 +148,18 @@ nst/
 │           └── tests.rs          # Unit tests
 ├── runtime/                      # Runtime configuration
 │   └── src/lib.rs
-└── node/                         # Blockchain node
+├── node/                         # Blockchain node
+│   └── src/
+│       ├── main.rs
+│       ├── chain_spec.rs
+│       ├── cli.rs
+│       ├── command.rs
+│       ├── rpc.rs
+│       └── service.rs
+└── frontend/                     # React wallet UI
     └── src/
-        ├── main.rs
-        ├── chain_spec.rs
-        ├── cli.rs
-        ├── command.rs
-        ├── rpc.rs
-        └── service.rs
+        ├── App.tsx
+        └── App.css
 ```
 
 ## Prerequisites
@@ -123,6 +170,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Add wasm target
 rustup target add wasm32-unknown-unknown
+
+# For frontend
+npm install (in frontend directory)
 ```
 
 ## Building
@@ -131,8 +181,23 @@ rustup target add wasm32-unknown-unknown
 # Build the UBI token pallet
 cargo build -p pallet-ubi-token
 
-# Build the entire project
-cargo build --release
+# Build the entire project (release)
+cargo build -p nst-node --release
+
+# Build frontend
+cd frontend && npm install
+```
+
+## Running
+
+```bash
+# Terminal 1: Start the node
+./target/release/nst-node --dev --tmp
+
+# Terminal 2: Start the frontend
+cd frontend && npm run dev
+
+# Open http://localhost:5173 and connect your wallet
 ```
 
 ## Testing
@@ -154,10 +219,10 @@ Key parameters in `runtime/src/lib.rs`:
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `UbiAmount` | Tokens per claim period | 100 NST |
-| `ClaimPeriodBlocks` | Blocks between claims | 14,400 (~1 day) |
-| `ExpirationBlocks` | Blocks until expiry | 100,800 (~7 days) |
-| `MaxBacklogPeriods` | Max claimable backlog | 3 days |
+| `UbiAmount` | Tokens per claim period | 100 NST (9 decimals) |
+| `ClaimPeriodBlocks` | Blocks between claims | 10 (dev) / 14,400 (~1 day) |
+| `ExpirationBlocks` | Blocks until expiry | 70 (dev) / 100,800 (~7 days) |
+| `MaxBacklogPeriods` | Max claimable backlog | 3 periods |
 
 ## Why Exchanges Cannot Operate
 
@@ -171,19 +236,19 @@ EXCHANGE ATTACK ATTEMPT:
    → Exchange has nothing to transfer!
    → No transfer function exists!
 
-3. Exchange model = BROKEN ✓
+3. Exchange model = BROKEN
 ```
 
 ## Comparison with Other UBI Projects
 
-| Project | Transferable | Expires | Anti-Speculation |
-|---------|-------------|---------|------------------|
-| Circles UBI | Trust-limited | Demurrage | Web of trust |
-| GoodDollar | Yes | No | Reserve model |
-| Worldcoin | Yes | No | None |
-| **NST** | **No** | **Yes (7 days)** | **Burn-only** |
+| Project | Transferable | Expires | Anti-Speculation | Free Transactions |
+|---------|-------------|---------|------------------|-------------------|
+| Circles UBI | Trust-limited | Demurrage | Web of trust | No |
+| GoodDollar | Yes | No | Reserve model | No |
+| Worldcoin | Yes | No | None | No |
+| **NST** | **No** | **Yes (7 days)** | **Burn-only** | **Yes** |
 
-NST is the first truly non-transferable UBI token.
+NST is the first truly non-transferable, fee-free UBI token.
 
 ## Use Cases
 
@@ -195,11 +260,12 @@ NST is the first truly non-transferable UBI token.
 ## Roadmap
 
 - [x] Core burn-only pallet
-- [x] Reputation tracking
+- [x] Reputation tracking (volume-based)
 - [x] Expiration system
 - [x] Comprehensive tests
-- [ ] Node implementation
-- [ ] Frontend wallet
+- [x] Node implementation
+- [x] Frontend wallet
+- [x] Free transactions (unsigned)
 - [ ] Mobile app
 - [ ] Testnet launch
 

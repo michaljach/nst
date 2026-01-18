@@ -8,8 +8,8 @@ use frame_support::{assert_noop, assert_ok};
 #[test]
 fn claim_works_for_new_account() {
     new_test_ext().execute_with(|| {
-        // Alice claims for the first time
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        // Alice claims for the first time (unsigned tx)
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Check balance
         assert_eq!(UbiToken::spendable_balance(&ALICE), 100);
@@ -36,11 +36,11 @@ fn claim_works_for_new_account() {
 #[test]
 fn cannot_claim_twice_in_same_period() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Try to claim again immediately
         assert_noop!(
-            UbiToken::claim(RuntimeOrigin::signed(ALICE)),
+            UbiToken::claim(RuntimeOrigin::none(), ALICE),
             Error::<Test>::NothingToClaim
         );
     });
@@ -49,14 +49,14 @@ fn cannot_claim_twice_in_same_period() {
 #[test]
 fn can_claim_after_one_period() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
         assert_eq!(UbiToken::spendable_balance(&ALICE), 100);
 
         // Advance one claim period (100 blocks)
         run_to_block(101);
 
         // Can claim again
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
         assert_eq!(UbiToken::spendable_balance(&ALICE), 200);
     });
 }
@@ -64,12 +64,12 @@ fn can_claim_after_one_period() {
 #[test]
 fn can_claim_backlog_up_to_max() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Advance 5 periods (500 blocks) - should only get 3 days backlog
         run_to_block(501);
 
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Should get 3 periods (max backlog) = 300 tokens
         // Plus the 100 from first claim = 400 total
@@ -94,7 +94,7 @@ fn first_activity_recorded_on_claim() {
         let rep_before = ReputationStore::<Test>::get(ALICE);
         assert_eq!(rep_before.first_activity, 0);
 
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         let rep_after = ReputationStore::<Test>::get(ALICE);
         assert_eq!(rep_after.first_activity, 1); // Block 1
@@ -104,9 +104,9 @@ fn first_activity_recorded_on_claim() {
 #[test]
 fn multiple_accounts_can_claim() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(BOB)));
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(CHARLIE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), BOB));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), CHARLIE));
 
         assert_eq!(UbiToken::spendable_balance(&ALICE), 100);
         assert_eq!(UbiToken::spendable_balance(&BOB), 100);
@@ -123,10 +123,10 @@ fn multiple_accounts_can_claim() {
 #[test]
 fn burn_works() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
-        // Alice burns 50 tokens to Bob
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 50));
+        // Alice burns 50 tokens to Bob (unsigned tx with from parameter)
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 50));
 
         // Alice balance decreased
         assert_eq!(UbiToken::spendable_balance(&ALICE), 50);
@@ -152,8 +152,8 @@ fn burn_works() {
 #[test]
 fn burn_updates_sender_reputation() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 50));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 50));
 
         let rep = ReputationStore::<Test>::get(ALICE);
         assert_eq!(rep.burns_sent_count, 1);
@@ -164,8 +164,8 @@ fn burn_updates_sender_reputation() {
 #[test]
 fn burn_updates_recipient_reputation() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 50));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 50));
 
         let rep = ReputationStore::<Test>::get(BOB);
         assert_eq!(rep.burns_received_count, 1);
@@ -177,10 +177,10 @@ fn burn_updates_recipient_reputation() {
 #[test]
 fn cannot_burn_to_self() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         assert_noop!(
-            UbiToken::burn(RuntimeOrigin::signed(ALICE), ALICE, 50),
+            UbiToken::burn(RuntimeOrigin::none(), ALICE, ALICE, 50),
             Error::<Test>::CannotBurnToSelf
         );
     });
@@ -189,10 +189,10 @@ fn cannot_burn_to_self() {
 #[test]
 fn cannot_burn_zero_amount() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         assert_noop!(
-            UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 0),
+            UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 0),
             Error::<Test>::AmountMustBePositive
         );
     });
@@ -201,10 +201,10 @@ fn cannot_burn_zero_amount() {
 #[test]
 fn cannot_burn_more_than_balance() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         assert_noop!(
-            UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 150),
+            UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 150),
             Error::<Test>::InsufficientBalance
         );
     });
@@ -214,17 +214,17 @@ fn cannot_burn_more_than_balance() {
 fn burn_uses_fifo() {
     new_test_ext().execute_with(|| {
         // Alice claims at block 1
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Advance one period and claim again
         run_to_block(101);
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Alice has 200 tokens in 2 batches
         assert_eq!(UbiToken::spendable_balance(&ALICE), 200);
 
         // Burn 150 - should use all of first batch (100) + 50 from second
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 150));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 150));
 
         assert_eq!(UbiToken::spendable_balance(&ALICE), 50);
 
@@ -238,11 +238,11 @@ fn burn_uses_fifo() {
 #[test]
 fn multiple_burns_accumulate_reputation() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 30));
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 20));
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), CHARLIE, 10));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 30));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 20));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, CHARLIE, 10));
 
         let alice_rep = ReputationStore::<Test>::get(ALICE);
         assert_eq!(alice_rep.burns_sent_count, 3);
@@ -265,7 +265,7 @@ fn multiple_burns_accumulate_reputation() {
 #[test]
 fn tokens_expire_after_expiration_period() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
         assert_eq!(UbiToken::spendable_balance(&ALICE), 100);
 
         // Advance past expiration (700 blocks)
@@ -279,14 +279,14 @@ fn tokens_expire_after_expiration_period() {
 #[test]
 fn expired_tokens_cleaned_up_on_claim() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Advance past expiration (700 blocks)
         run_to_block(702);
 
         // Claim again - this should clean up expired tokens and claim backlog
         // After 702 blocks (7 periods), can claim max backlog of 3 periods = 300 tokens
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Should have 300 (3 periods backlog, max)
         // Original 100 expired, new 300 from backlog claim
@@ -308,16 +308,16 @@ fn expired_tokens_cleaned_up_on_claim() {
 fn expired_tokens_cleaned_up_on_burn() {
     new_test_ext().execute_with(|| {
         // Alice claims twice
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
         run_to_block(101);
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Advance so first batch expires (700 blocks from block 1 = 701)
         // but second batch hasn't (700 blocks from block 101 = 801)
         run_to_block(702);
 
         // Alice tries to burn - should clean up expired batch first
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 50));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 50));
 
         // Should have 50 left from second batch
         assert_eq!(UbiToken::spendable_balance(&ALICE), 50);
@@ -327,14 +327,14 @@ fn expired_tokens_cleaned_up_on_burn() {
 #[test]
 fn cannot_burn_expired_tokens() {
     new_test_ext().execute_with(|| {
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Advance past expiration
         run_to_block(702);
 
         // Try to burn - should fail (tokens expired)
         assert_noop!(
-            UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 50),
+            UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 50),
             Error::<Test>::InsufficientBalance
         );
     });
@@ -350,7 +350,7 @@ fn can_claim_helper_works() {
         // New account can claim
         assert!(UbiToken::can_claim(&ALICE));
 
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Just claimed - cannot claim again
         assert!(!UbiToken::can_claim(&ALICE));
@@ -367,7 +367,7 @@ fn claimable_amount_helper_works() {
         // New account - 1 period = 100
         assert_eq!(UbiToken::claimable_amount(&ALICE), 100);
 
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // Just claimed - 0
         assert_eq!(UbiToken::claimable_amount(&ALICE), 0);
@@ -390,11 +390,11 @@ fn claimable_amount_helper_works() {
 fn full_lifecycle_pizza_purchase() {
     new_test_ext().execute_with(|| {
         // Day 1: Alice and Bob both claim UBI
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(BOB)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), BOB));
 
         // Alice burns 50 tokens to Bob for pizza
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), BOB, 50));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, BOB, 50));
 
         // Check balances
         assert_eq!(UbiToken::spendable_balance(&ALICE), 50);
@@ -411,8 +411,8 @@ fn full_lifecycle_pizza_purchase() {
 
         // Day 2: Bob burns to Charlie for flour
         run_to_block(101);
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(BOB)));
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(BOB), CHARLIE, 30));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), BOB));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), BOB, CHARLIE, 30));
 
         let charlie_rep = ReputationStore::<Test>::get(CHARLIE);
         assert_eq!(charlie_rep.burns_received_count, 1);
@@ -432,7 +432,7 @@ fn sybil_attack_is_pointless() {
     new_test_ext().execute_with(|| {
         // Attacker creates many accounts and claims
         for i in 100..110 {
-            assert_ok!(UbiToken::claim(RuntimeOrigin::signed(i)));
+            assert_ok!(UbiToken::claim(RuntimeOrigin::none(), i));
         }
 
         // Total supply is 1000 (10 accounts * 100)
@@ -455,11 +455,11 @@ fn sybil_attack_is_pointless() {
 fn exchange_cannot_operate() {
     new_test_ext().execute_with(|| {
         // User claims tokens
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), ALICE));
 
         // User "deposits" to exchange by burning to exchange address
         let exchange: u64 = 999;
-        assert_ok!(UbiToken::burn(RuntimeOrigin::signed(ALICE), exchange, 100));
+        assert_ok!(UbiToken::burn(RuntimeOrigin::none(), ALICE, exchange, 100));
 
         // Exchange received NO TOKENS - just a burn event
         assert_eq!(UbiToken::spendable_balance(&exchange), 0);
@@ -468,7 +468,7 @@ fn exchange_cannot_operate() {
         // The burn event is proof Alice paid, but exchange cannot transfer anything
 
         // Exchange can claim its own UBI
-        assert_ok!(UbiToken::claim(RuntimeOrigin::signed(exchange)));
+        assert_ok!(UbiToken::claim(RuntimeOrigin::none(), exchange));
         assert_eq!(UbiToken::spendable_balance(&exchange), 100);
 
         // But those are the exchange's own tokens, not "user deposits"
