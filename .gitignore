@@ -1,0 +1,25 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Substrate/Polkadot specific
+*.wasm
+*.wasm.gz
+
+# Local development
+.env
+*.log
+
+# Documentation build
+/docs/build/
