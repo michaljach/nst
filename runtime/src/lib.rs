@@ -9,19 +9,26 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+#[cfg(not(feature = "std"))]
+pub const WASM_BINARY: Option<&[u8]> = None;
+
+extern crate alloc;
+
+use alloc::{vec, vec::Vec};
 use frame_support::{
     construct_runtime, derive_impl, parameter_types,
-    traits::{ConstU32, ConstU64, ConstU128},
+    traits::{ConstU16, ConstU32, ConstU8},
     weights::constants::RocksDbWeight,
 };
+use sp_consensus_aura::sr25519::AuthorityId as AuraId;
+use sp_consensus_grandpa::AuthorityId as GrandpaId;
 use sp_core::{crypto::KeyTypeId, OpaqueMetadata};
 use sp_runtime::{
-    create_runtime_str, generic,
-    traits::{BlakeTwo256, Block as BlockT, IdentityLookup},
+    create_runtime_str, generic, impl_opaque_keys,
+    traits::{AccountIdLookup, BlakeTwo256, Block as BlockT, NumberFor},
     transaction_validity::{TransactionSource, TransactionValidity},
-    ApplyExtrinsicResult,
+    ApplyExtrinsicResult, ExtrinsicInclusionMode,
 };
-use sp_std::prelude::*;
 
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
@@ -30,8 +37,9 @@ use sp_version::RuntimeVersion;
 /// Alias for the signature type used by this runtime
 pub type Signature = sp_runtime::MultiSignature;
 
-/// Account ID type
-pub type AccountId = <<Signature as sp_runtime::traits::Verify>::Signer as sp_runtime::traits::IdentifyAccount>::Public;
+/// Account ID type - derived from the signer of a Signature
+pub type AccountId =
+    <<Signature as sp_runtime::traits::Verify>::Signer as sp_runtime::traits::IdentifyAccount>::AccountId;
 
 /// Balance type for native currency
 pub type Balance = u128;
@@ -86,7 +94,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1,
-    state_version: 1,
+    system_version: 1,
 };
 
 /// Native version
@@ -115,7 +123,7 @@ impl frame_system::Config for Runtime {
     type Hash = Hash;
     type Hashing = BlakeTwo256;
     type AccountId = AccountId;
-    type Lookup = IdentityLookup<AccountId>;
+    type Lookup = AccountIdLookup<AccountId, ()>;
     type Block = Block;
     type RuntimeEvent = RuntimeEvent;
     type BlockHashCount = BlockHashCount;
@@ -125,18 +133,18 @@ impl frame_system::Config for Runtime {
     type OnNewAccount = ();
     type OnKilledAccount = ();
     type SystemWeightInfo = ();
-    type SS58Prefix = ConstU32<42>;
+    type SS58Prefix = ConstU16<42>;
     type OnSetCode = ();
     type MaxConsumers = ConstU32<16>;
 }
 
 parameter_types! {
-    pub const MinimumPeriod: u64 = 5000;
+    pub const MinimumPeriod: u64 = 3000; // 6 second blocks (half of 6000ms)
 }
 
 impl pallet_timestamp::Config for Runtime {
     type Moment = u64;
-    type OnTimestampSet = ();
+    type OnTimestampSet = Aura;
     type MinimumPeriod = MinimumPeriod;
     type WeightInfo = ();
 }
@@ -160,10 +168,8 @@ impl pallet_balances::Config for Runtime {
     type MaxFreezes = ();
     type RuntimeHoldReason = ();
     type RuntimeFreezeReason = ();
+    type DoneSlashHandler = ();
 }
-
-// Constant import for transaction payment
-use frame_support::traits::ConstU8;
 
 impl pallet_transaction_payment::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
@@ -172,12 +178,46 @@ impl pallet_transaction_payment::Config for Runtime {
     type WeightToFee = frame_support::weights::IdentityFee<Balance>;
     type LengthToFee = frame_support::weights::IdentityFee<Balance>;
     type FeeMultiplierUpdate = ();
+    type WeightInfo = ();
 }
 
 impl pallet_sudo::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type RuntimeCall = RuntimeCall;
     type WeightInfo = ();
+}
+
+// ============================================================================
+// CONSENSUS (AURA + GRANDPA)
+// ============================================================================
+
+impl_opaque_keys! {
+    pub struct SessionKeys {
+        pub aura: Aura,
+        pub grandpa: Grandpa,
+    }
+}
+
+parameter_types! {
+    pub const MaxAuthorities: u32 = 32;
+}
+
+impl pallet_aura::Config for Runtime {
+    type AuthorityId = AuraId;
+    type DisabledValidators = ();
+    type MaxAuthorities = MaxAuthorities;
+    type AllowMultipleBlocksPerSlot = frame_support::traits::ConstBool<false>;
+    type SlotDuration = pallet_aura::MinimumPeriodTimesTwo<Runtime>;
+}
+
+impl pallet_grandpa::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = ();
+    type MaxAuthorities = MaxAuthorities;
+    type MaxNominators = ConstU32<0>;
+    type MaxSetIdSessionEntries = ();
+    type KeyOwnerProof = sp_core::Void;
+    type EquivocationReportSystem = ();
 }
 
 // ============================================================================
@@ -221,6 +261,10 @@ construct_runtime!(
         System: frame_system,
         Timestamp: pallet_timestamp,
         
+        // Consensus
+        Aura: pallet_aura,
+        Grandpa: pallet_grandpa,
+        
         // Monetary pallets (for transaction fees only)
         Balances: pallet_balances,
         TransactionPayment: pallet_transaction_payment,
@@ -233,6 +277,20 @@ construct_runtime!(
     }
 );
 
+/// Opaque types for the runtime. Used for the node.
+pub mod opaque {
+    use super::*;
+    
+    pub use sp_runtime::OpaqueExtrinsic as UncheckedExtrinsic;
+    
+    /// Opaque block header type.
+    pub type Header = generic::Header<BlockNumber, BlakeTwo256>;
+    /// Opaque block type.
+    pub type Block = generic::Block<Header, UncheckedExtrinsic>;
+    /// Opaque block identifier type.
+    pub type BlockId = generic::BlockId<Block>;
+}
+
 // ============================================================================
 // RUNTIME API IMPLEMENTATION
 // ============================================================================
@@ -243,11 +301,11 @@ sp_api::impl_runtime_apis! {
             VERSION
         }
 
-        fn execute_block(block: Block) {
-            Executive::execute_block(block);
+        fn execute_block(block: <Block as BlockT>::LazyBlock) {
+            Executive::execute_block(block.into());
         }
 
-        fn initialize_block(header: &<Block as BlockT>::Header) -> sp_runtime::ExtrinsicInclusionMode {
+        fn initialize_block(header: &<Block as BlockT>::Header) -> ExtrinsicInclusionMode {
             Executive::initialize_block(header)
         }
     }
@@ -261,7 +319,7 @@ sp_api::impl_runtime_apis! {
             Runtime::metadata_at_version(version)
         }
 
-        fn metadata_versions() -> sp_std::vec::Vec<u32> {
+        fn metadata_versions() -> Vec<u32> {
             Runtime::metadata_versions()
         }
     }
@@ -280,7 +338,7 @@ sp_api::impl_runtime_apis! {
         }
 
         fn check_inherents(
-            block: Block,
+            block: <Block as BlockT>::LazyBlock,
             data: sp_inherents::InherentData,
         ) -> sp_inherents::CheckInherentsResult {
             data.check_extrinsics(&block)
@@ -303,15 +361,52 @@ sp_api::impl_runtime_apis! {
         }
     }
 
+    impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
+        fn slot_duration() -> sp_consensus_aura::SlotDuration {
+            sp_consensus_aura::SlotDuration::from_millis(Aura::slot_duration())
+        }
+
+        fn authorities() -> Vec<AuraId> {
+            pallet_aura::Authorities::<Runtime>::get().into_inner()
+        }
+    }
+
+    impl sp_consensus_grandpa::GrandpaApi<Block> for Runtime {
+        fn grandpa_authorities() -> sp_consensus_grandpa::AuthorityList {
+            Grandpa::grandpa_authorities()
+        }
+
+        fn current_set_id() -> sp_consensus_grandpa::SetId {
+            Grandpa::current_set_id()
+        }
+
+        fn submit_report_equivocation_unsigned_extrinsic(
+            _equivocation_proof: sp_consensus_grandpa::EquivocationProof<
+                <Block as BlockT>::Hash,
+                NumberFor<Block>,
+            >,
+            _key_owner_proof: sp_consensus_grandpa::OpaqueKeyOwnershipProof,
+        ) -> Option<()> {
+            None
+        }
+
+        fn generate_key_ownership_proof(
+            _set_id: sp_consensus_grandpa::SetId,
+            _authority_id: GrandpaId,
+        ) -> Option<sp_consensus_grandpa::OpaqueKeyOwnershipProof> {
+            None
+        }
+    }
+
     impl sp_session::SessionKeys<Block> for Runtime {
-        fn generate_session_keys(_seed: Option<Vec<u8>>) -> Vec<u8> {
-            Vec::new()
+        fn generate_session_keys(seed: Option<Vec<u8>>) -> Vec<u8> {
+            SessionKeys::generate(seed)
         }
 
         fn decode_session_keys(
-            _encoded: Vec<u8>,
+            encoded: Vec<u8>,
         ) -> Option<Vec<(Vec<u8>, KeyTypeId)>> {
-            None
+            SessionKeys::decode_into_raw_public_keys(&encoded)
         }
     }
 
@@ -356,7 +451,7 @@ sp_api::impl_runtime_apis! {
 
         fn dispatch_benchmark(
             _config: frame_benchmarking::BenchmarkConfig,
-        ) -> Result<Vec<frame_benchmarking::BenchmarkBatch>, sp_runtime::RuntimeString> {
+        ) -> Result<Vec<frame_benchmarking::BenchmarkBatch>, alloc::string::String> {
             Ok(vec![])
         }
     }
@@ -366,8 +461,8 @@ sp_api::impl_runtime_apis! {
             frame_support::genesis_builder_helper::build_state::<RuntimeGenesisConfig>(config)
         }
 
-        fn get_preset(id: &Option<sp_genesis_builder::PresetId>) -> Option<Vec<u8>> {
-            frame_support::genesis_builder_helper::get_preset::<RuntimeGenesisConfig>(id, |_| None)
+        fn get_preset(name: &Option<sp_genesis_builder::PresetId>) -> Option<Vec<u8>> {
+            frame_support::genesis_builder_helper::get_preset::<RuntimeGenesisConfig>(name, |_| None)
         }
 
         fn preset_names() -> Vec<sp_genesis_builder::PresetId> {

@@ -5,8 +5,11 @@ use crate::{
     cli::{Cli, Subcommand},
     service,
 };
+use clap::Parser;
+use nst_runtime::opaque::Block;
 use sc_cli::SubstrateCli;
 use sc_service::PartialComponents;
+use sp_runtime::traits::Block as BlockT;
 
 impl SubstrateCli for Cli {
     fn impl_name() -> String {
@@ -118,7 +121,7 @@ pub fn run() -> sc_cli::Result<()> {
         }
         Some(Subcommand::ChainInfo(cmd)) => {
             let runner = cli.create_runner(cmd)?;
-            runner.sync_run(|config| cmd.run::<nst_runtime::Block>(&config))
+            runner.sync_run(|config| cmd.run::<Block>(&config))
         }
         #[cfg(feature = "runtime-benchmarks")]
         Some(Subcommand::Benchmark(_cmd)) => {
@@ -127,7 +130,18 @@ pub fn run() -> sc_cli::Result<()> {
         None => {
             let runner = cli.create_runner(&cli.run)?;
             runner.run_node_until_exit(|config| async move {
-                service::new_full(config).map_err(sc_cli::Error::Service)
+                match config.network.network_backend {
+                    sc_network::config::NetworkBackendType::Libp2p => service::new_full::<
+                        sc_network::NetworkWorker<
+                            nst_runtime::opaque::Block,
+                            <nst_runtime::opaque::Block as sp_runtime::traits::Block>::Hash,
+                        >,
+                    >(config)
+                    .map_err(sc_cli::Error::Service),
+                    sc_network::config::NetworkBackendType::Litep2p =>
+                        service::new_full::<sc_network::Litep2pNetworkBackend>(config)
+                            .map_err(sc_cli::Error::Service),
+                }
             })
         }
     }

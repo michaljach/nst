@@ -281,14 +281,16 @@ fn expired_tokens_cleaned_up_on_claim() {
     new_test_ext().execute_with(|| {
         assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
 
-        // Advance past expiration
+        // Advance past expiration (700 blocks)
         run_to_block(702);
 
-        // Claim again - this should clean up expired tokens
+        // Claim again - this should clean up expired tokens and claim backlog
+        // After 702 blocks (7 periods), can claim max backlog of 3 periods = 300 tokens
         assert_ok!(UbiToken::claim(RuntimeOrigin::signed(ALICE)));
 
-        // Should have exactly 100 (new claim only)
-        assert_eq!(UbiToken::spendable_balance(&ALICE), 100);
+        // Should have 300 (3 periods backlog, max)
+        // Original 100 expired, new 300 from backlog claim
+        assert_eq!(UbiToken::spendable_balance(&ALICE), 300);
 
         // Check expired event was emitted
         let events = System::events();

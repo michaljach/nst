@@ -2,7 +2,7 @@ use crate as pallet_ubi_token;
 use frame_support::{
     derive_impl,
     parameter_types,
-    traits::{ConstU32, ConstU64, ConstU128},
+    traits::{ConstU16, ConstU32, ConstU64},
 };
 use sp_core::H256;
 use sp_runtime::{
@@ -45,7 +45,7 @@ impl frame_system::Config for Test {
     type OnNewAccount = ();
     type OnKilledAccount = ();
     type SystemWeightInfo = ();
-    type SS58Prefix = ConstU32<42>;
+    type SS58Prefix = ConstU16<42>;
     type OnSetCode = ();
     type MaxConsumers = ConstU32<16>;
 }
