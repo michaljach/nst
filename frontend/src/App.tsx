@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ApiPromise, WsProvider } from '@polkadot/api';
 import { web3Accounts, web3Enable } from '@polkadot/extension-dapp';
 import type { InjectedAccountWithMeta } from '@polkadot/extension-inject/types';
@@ -17,7 +18,31 @@ interface Reputation {
   firstActivity: number;
 }
 
+interface BlockInfo {
+  number: number;
+  hash: string;
+  parentHash: string;
+  extrinsicsCount: number;
+  timestamp: number;
+}
+
+interface ChainEvent {
+  blockNumber: number;
+  section: string;
+  method: string;
+  data: string;
+  timestamp: number;
+}
+
+interface ChainStats {
+  totalSupply: string;
+  totalAccounts: number;
+  avgBlockTime: number;
+  finalizedBlock: number;
+}
+
 function App() {
+  const navigate = useNavigate();
   const [api, setApi] = useState<ApiPromise | null>(null);
   const [accounts, setAccounts] = useState<InjectedAccountWithMeta[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string>('');
@@ -39,6 +64,74 @@ function App() {
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Blockchain explorer state
+  const [recentBlocks, setRecentBlocks] = useState<BlockInfo[]>([]);
+  const [recentEvents, setRecentEvents] = useState<ChainEvent[]>([]);
+  const [chainStats, setChainStats] = useState<ChainStats>({
+    totalSupply: '0',
+    totalAccounts: 0,
+    avgBlockTime: 6,
+    finalizedBlock: 0,
+  });
+  const [showExplorer, setShowExplorer] = useState(true);
+  const lastBlockTimeRef = useRef<number>(Date.now());
+  const blockTimesRef = useRef<number[]>([]);
+
+  // Fetch historical blocks and events from chain
+  const fetchHistoricalData = useCallback(async (api: ApiPromise, currentBlock: number) => {
+    const blocks: BlockInfo[] = [];
+    const events: ChainEvent[] = [];
+    
+    // Fetch last 50 blocks to find events (they may be sparse)
+    const startBlock = Math.max(1, currentBlock - 49);
+    
+    console.log(`Fetching blocks ${startBlock} to ${currentBlock}`);
+    
+    for (let blockNum = currentBlock; blockNum >= startBlock; blockNum--) {
+      try {
+        const blockHash = await api.rpc.chain.getBlockHash(blockNum);
+        const signedBlock = await api.rpc.chain.getBlock(blockHash);
+        const header = signedBlock.block.header;
+        
+        // Only keep last 8 blocks for display
+        if (blocks.length < 8) {
+          blocks.push({
+            number: blockNum,
+            hash: blockHash.toHex(),
+            parentHash: header.parentHash.toHex(),
+            extrinsicsCount: signedBlock.block.extrinsics.length,
+            timestamp: Date.now() - ((currentBlock - blockNum) * 6000),
+          });
+        }
+        
+        // Get events for this block
+        const apiAt = await api.at(blockHash);
+        const blockEvents = await apiAt.query.system.events();
+        
+        blockEvents.forEach((record: any) => {
+          const { event } = record;
+          console.log(`Block ${blockNum} event: ${event.section}.${event.method}`);
+          if (event.section === 'ubiToken') {
+            console.log('Found UBI event:', event.method, event.data.toString());
+            events.push({
+              blockNumber: blockNum,
+              section: event.section,
+              method: event.method,
+              data: event.data.toString(),
+              timestamp: Date.now() - ((currentBlock - blockNum) * 6000),
+            });
+          }
+        });
+      } catch (e) {
+        console.error(`Error fetching block ${blockNum}:`, e);
+      }
+    }
+    
+    console.log(`Found ${events.length} UBI events`);
+    setRecentBlocks(blocks.slice(0, 8));
+    setRecentEvents(events.slice(0, 10));
+  }, []);
+
   // Connect to node
   useEffect(() => {
     const connect = async () => {
@@ -50,16 +143,97 @@ function App() {
         setConnected(true);
         setStatus('Connected to NST node');
         
+        // Get current block and fetch historical data
+        const currentHeader = await api.rpc.chain.getHeader();
+        const currentBlock = currentHeader.number.toNumber();
+        setBlockNumber(currentBlock);
+        
+        // Fetch historical blocks and events
+        await fetchHistoricalData(api, currentBlock);
+        
         // Subscribe to new blocks
-        await api.rpc.chain.subscribeNewHeads((header) => {
-          setBlockNumber(header.number.toNumber());
+        await api.rpc.chain.subscribeNewHeads(async (header) => {
+          const blockNum = header.number.toNumber();
+          setBlockNumber(blockNum);
+          
+          // Calculate block time
+          const now = Date.now();
+          const timeDiff = (now - lastBlockTimeRef.current) / 1000;
+          lastBlockTimeRef.current = now;
+          
+          // Keep last 10 block times for average
+          blockTimesRef.current.push(timeDiff);
+          if (blockTimesRef.current.length > 10) {
+            blockTimesRef.current.shift();
+          }
+          const avgBlockTime = blockTimesRef.current.reduce((a, b) => a + b, 0) / blockTimesRef.current.length;
+          
+          // Get block details
+          const blockHash = header.hash.toHex();
+          const signedBlock = await api.rpc.chain.getBlock(blockHash);
+          const extrinsicsCount = signedBlock.block.extrinsics.length;
+          
+          const newBlock: BlockInfo = {
+            number: blockNum,
+            hash: blockHash,
+            parentHash: header.parentHash.toHex(),
+            extrinsicsCount,
+            timestamp: now,
+          };
+          
+          setRecentBlocks(prev => {
+            // Prevent duplicates
+            if (prev.some(b => b.number === newBlock.number)) {
+              return prev;
+            }
+            return [newBlock, ...prev].slice(0, 8);
+          });
+          
+          // Get events for this block
+          const apiAt = await api.at(blockHash);
+          const events = await apiAt.query.system.events();
+          
+          const blockEvents: ChainEvent[] = [];
+          events.forEach((record: any) => {
+            const { event } = record;
+            // Filter for interesting events (UBI token events)
+            if (event.section === 'ubiToken') {
+              blockEvents.push({
+                blockNumber: blockNum,
+                section: event.section,
+                method: event.method,
+                data: event.data.toString(),
+                timestamp: now,
+              });
+            }
+          });
+          
+          if (blockEvents.length > 0) {
+            setRecentEvents(prev => [...blockEvents, ...prev].slice(0, 10));
+          }
+          
+          // Update chain stats
+          try {
+            const totalSupply = await api.query.ubiToken.totalSupply();
+            const finalizedHead = await api.rpc.chain.getFinalizedHead();
+            const finalizedHeader = await api.rpc.chain.getHeader(finalizedHead);
+            
+            setChainStats(prev => ({
+              ...prev,
+              totalSupply: totalSupply.toString(),
+              avgBlockTime: Math.round(avgBlockTime * 10) / 10,
+              finalizedBlock: finalizedHeader.number.toNumber(),
+            }));
+          } catch (e) {
+            console.error('Error fetching chain stats:', e);
+          }
         });
       } catch (err) {
         setStatus(`Failed to connect: ${err}`);
       }
     };
     connect();
-  }, []);
+  }, [fetchHistoricalData]);
 
   // Connect wallet
   const connectWallet = async () => {
@@ -251,6 +425,40 @@ function App() {
     return 'Legend';
   };
 
+  // Format hash for display
+  const formatHash = (hash: string): string => {
+    return `${hash.slice(0, 10)}...${hash.slice(-8)}`;
+  };
+
+  // Format time ago
+  const formatTimeAgo = (timestamp: number): string => {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  };
+
+  // Format event data for display
+  const formatEventData = (method: string, data: string): string => {
+    try {
+      const parts = data.replace(/[\[\]]/g, '').split(',').map(s => s.trim());
+      switch (method) {
+        case 'Claimed':
+          return `${formatHash(parts[0])} claimed ${formatTokens(parts[1])} NST`;
+        case 'Burned':
+          return `${formatHash(parts[0])} burned ${formatTokens(parts[2])} NST to ${formatHash(parts[1])}`;
+        case 'TokensExpired':
+          return `${formatTokens(parts[1])} NST expired for ${formatHash(parts[0])}`;
+        default:
+          return data.length > 50 ? data.slice(0, 50) + '...' : data;
+      }
+    } catch {
+      return data.length > 50 ? data.slice(0, 50) + '...' : data;
+    }
+  };
+
   return (
     <div className="container">
       <header>
@@ -397,6 +605,83 @@ function App() {
           {status}
         </div>
       )}
+
+      {/* Blockchain Explorer Section */}
+      <div className="explorer-section">
+        <div className="explorer-header" onClick={() => setShowExplorer(!showExplorer)}>
+          <h2>Blockchain Explorer</h2>
+          <span className="toggle-icon">{showExplorer ? '−' : '+'}</span>
+        </div>
+        
+        {showExplorer && (
+          <>
+            {/* Chain Stats */}
+            <div className="chain-stats">
+              <div className="stat-item">
+                <span className="stat-value">{blockNumber}</span>
+                <span className="stat-label">Current Block</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value">{chainStats.finalizedBlock}</span>
+                <span className="stat-label">Finalized</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value">{formatTokens(chainStats.totalSupply)}</span>
+                <span className="stat-label">Total Supply (NST)</span>
+              </div>
+              <div className="stat-item">
+                <span className="stat-value">{chainStats.avgBlockTime}s</span>
+                <span className="stat-label">Avg Block Time</span>
+              </div>
+            </div>
+
+            {/* Recent Blocks - Visual Chain */}
+            <div className="explorer-panel">
+              <h3>Recent Blocks</h3>
+              <div className="blocks-chain">
+                {recentBlocks.length === 0 ? (
+                  <div className="empty-state">Waiting for blocks...</div>
+                ) : (
+                  recentBlocks.slice().reverse().map((block, index, arr) => (
+                    <div key={block.hash} className={`block-chain-item ${index === 0 ? 'oldest' : ''} ${index === arr.length - 1 ? 'newest' : ''}`}>
+                      {index > 0 && <div className="chain-connector" />}
+                      <div 
+                        className={`block-cube ${index === arr.length - 1 ? 'latest' : ''}`}
+                        onClick={() => navigate(`/block/${block.number}`)}
+                      >
+                        <div className="cube-number">{block.number}</div>
+                        <div className="cube-txs">{block.extrinsicsCount} tx</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Recent Activity */}
+            <div className="explorer-panel">
+              <h3>Recent Activity</h3>
+              <div className="events-list">
+                {recentEvents.length === 0 ? (
+                  <div className="empty-state">No recent UBI token activity</div>
+                ) : (
+                  recentEvents.map((event, i) => (
+                    <div key={`${event.blockNumber}-${i}`} className="event-item">
+                      <div className={`event-type ${event.method.toLowerCase()}`}>
+                        {event.method}
+                      </div>
+                      <div className="event-details">
+                        <span className="event-data">{formatEventData(event.method, event.data)}</span>
+                        <span className="event-meta">Block #{event.blockNumber} · {formatTimeAgo(event.timestamp)}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
 
       <footer>
         <p>NST - Non Speculative Tokens</p>
