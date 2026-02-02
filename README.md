@@ -2,6 +2,15 @@
 
 A novel Substrate-based blockchain implementing a **burn-only UBI token** designed to prevent speculation and trading. This is the first implementation of a truly non-transferable cryptocurrency with built-in Universal Basic Income distribution.
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="screenshots/Screenshot 2026-02-02 at 19.37.21.png" width="100%" alt="NST Wallet Interface"/></td>
+    <td><img src="screenshots/Screenshot 2026-02-02 at 19.38.54.png" width="100%" alt="NST Transaction View"/></td>
+  </tr>
+</table>
+
 ## Core Concept
 
 Traditional cryptocurrencies allow transfers, enabling speculation and trading. NST takes a radical approach:

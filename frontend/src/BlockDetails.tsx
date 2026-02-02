@@ -41,14 +41,13 @@ function BlockDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Connect to node
   useEffect(() => {
     const connect = async () => {
       try {
         const provider = new WsProvider('ws://127.0.0.1:9944');
         const api = await ApiPromise.create({ provider });
         setApi(api);
-      } catch (e) {
+      } catch {
         setError('Failed to connect to node');
         setLoading(false);
       }
@@ -56,7 +55,6 @@ function BlockDetails() {
     connect();
   }, []);
 
-  // Fetch block data
   const fetchBlock = useCallback(async () => {
     if (!api || !blockId) return;
     
@@ -66,13 +64,10 @@ function BlockDetails() {
     try {
       let blockHash: string;
       
-      // Check if blockId is a number or hash
       if (/^\d+$/.test(blockId)) {
-        // It's a block number
         const hash = await api.rpc.chain.getBlockHash(parseInt(blockId));
         blockHash = hash.toHex();
       } else if (blockId.startsWith('0x')) {
-        // It's a hash
         blockHash = blockId;
       } else {
         setError('Invalid block identifier. Use block number or hash (0x...)');
@@ -83,9 +78,8 @@ function BlockDetails() {
       const signedBlock = await api.rpc.chain.getBlock(blockHash);
       const header = signedBlock.block.header;
       
-      // Get timestamp from extrinsics if available
       let timestamp: number | null = null;
-      signedBlock.block.extrinsics.forEach((ext: any) => {
+      (signedBlock.block.extrinsics as unknown as Array<{ method: { section: string; method: string; args: Array<{ toString(): string }> } }>).forEach((ext) => {
         if (ext.method.section === 'timestamp' && ext.method.method === 'set') {
           timestamp = parseInt(ext.method.args[0].toString());
         }
@@ -103,11 +97,10 @@ function BlockDetails() {
       
       setBlock(blockData);
       
-      // Parse extrinsics
-      const exts: Extrinsic[] = signedBlock.block.extrinsics.map((ext: any, index: number) => {
+      const exts: Extrinsic[] = (signedBlock.block.extrinsics as unknown as Array<{ method: { section: string; method: string; args: Array<{ toString(): string }> }; isSigned: boolean; signer: { toString(): string } }>).map((ext, index: number) => {
         const { method, section } = ext.method;
         const signer = ext.isSigned ? ext.signer.toString() : null;
-        const args = ext.method.args.map((arg: any) => arg.toString()).join(', ');
+        const args = ext.method.args.map((arg) => arg.toString()).join(', ');
         
         return {
           index,
@@ -134,106 +127,120 @@ function BlockDetails() {
   }, [api, fetchBlock]);
 
   return (
-    <div className="block-details-page">
-      <header className="block-header">
-        <button className="back-button" onClick={() => navigate('/')}>
-          &larr; Back
+    <div className="block-details-container">
+      <div className="details-header">
+        <button className="back-btn" onClick={() => navigate('/')}>
+          <span>←</span>
+          <span>Back</span>
         </button>
-        <h1>Block Details</h1>
-      </header>
+        <h1 className="details-title">Block Details</h1>
+      </div>
 
-      <main className="block-main">
-        {loading ? (
-          <div className="loading-state">Loading block data...</div>
-        ) : error ? (
-          <div className="error-state">{error}</div>
-        ) : block ? (
-          <>
-            <div className="block-info-card">
-              <h2>Block #{block.number}</h2>
-              
-              <div className="info-grid">
-                <div className="info-item">
-                  <span className="info-label">Block Hash</span>
-                  <span className="info-value mono">{block.hash}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Parent Hash</span>
-                  <span className="info-value mono clickable" onClick={() => navigate(`/block/${block.number - 1}`)}>
-                    {block.parentHash}
-                  </span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">State Root</span>
-                  <span className="info-value mono">{block.stateRoot}</span>
-                </div>
-                <div className="info-item">
-                  <span className="info-label">Extrinsics Root</span>
-                  <span className="info-value mono">{block.extrinsicsRoot}</span>
-                </div>
-                {block.timestamp && (
-                  <div className="info-item">
-                    <span className="info-label">Timestamp</span>
-                    <span className="info-value">
-                      {new Date(block.timestamp).toLocaleString()} ({formatTimeAgo(block.timestamp)})
-                    </span>
-                  </div>
-                )}
-              </div>
+      {loading ? (
+        <div className="loading-state">
+          <div className="loading-spinner" />
+          <div>Loading block data...</div>
+        </div>
+      ) : error ? (
+        <div className="error-state">
+          <div style={{ fontSize: '2rem', marginBottom: '1rem', color: 'var(--text-muted)' }}>×</div>
+          <div>{error}</div>
+        </div>
+      ) : block ? (
+        <>
+          <div className="info-card">
+            <h2 className="info-card-title">Block #{block.number.toLocaleString()}</h2>
+            
+            <div className="info-row">
+              <span className="info-label">Block Hash</span>
+              <span className="info-value mono">{block.hash}</span>
             </div>
+            
+            <div className="info-row">
+              <span className="info-label">Parent Hash</span>
+              <span 
+                className="info-value mono clickable" 
+                onClick={() => navigate(`/block/${block.number - 1}`)}
+              >
+                {block.parentHash}
+              </span>
+            </div>
+            
+            <div className="info-row">
+              <span className="info-label">State Root</span>
+              <span className="info-value mono">{block.stateRoot}</span>
+            </div>
+            
+            <div className="info-row">
+              <span className="info-label">Extrinsics Root</span>
+              <span className="info-value mono">{block.extrinsicsRoot}</span>
+            </div>
+            
+            {block.timestamp && (
+              <div className="info-row">
+                <span className="info-label">Timestamp</span>
+                <span className="info-value">
+                  {new Date(block.timestamp).toLocaleString()} ({formatTimeAgo(block.timestamp)})
+                </span>
+              </div>
+            )}
+          </div>
 
-            <div className="block-info-card">
-              <h2>Extrinsics ({extrinsics.length})</h2>
-              
-              {extrinsics.length === 0 ? (
-                <div className="empty-state">No extrinsics in this block</div>
-              ) : (
-                <div className="extrinsics-grid">
-                  {extrinsics.map((ext) => (
-                    <div key={ext.index} className="extrinsic-card">
-                      <div className="ext-header">
-                        <span className="ext-index">#{ext.index}</span>
-                        <span className="ext-call">{ext.section}.{ext.method}</span>
-                        {ext.signer ? (
-                          <span className="ext-signed">Signed</span>
-                        ) : (
-                          <span className="ext-unsigned">Unsigned</span>
-                        )}
-                      </div>
-                      
-                      {ext.signer && (
-                        <div className="ext-detail">
-                          <span className="ext-label">Signer</span>
-                          <span className="ext-value mono">{ext.signer}</span>
-                        </div>
-                      )}
-                      
-                      {ext.args && (
-                        <div className="ext-detail">
-                          <span className="ext-label">Arguments</span>
-                          <span className="ext-value mono">{ext.args || '(none)'}</span>
-                        </div>
+          <div className="info-card">
+            <h2 className="info-card-title">Extrinsics ({extrinsics.length})</h2>
+            
+            {extrinsics.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-state-icon">—</div>
+                <div>No extrinsics in this block</div>
+              </div>
+            ) : (
+              <div className="extrinsics-list">
+                {extrinsics.map((ext) => (
+                  <div key={ext.index} className="extrinsic-item">
+                    <div className="extrinsic-header">
+                      <span className="extrinsic-index">#{ext.index}</span>
+                      <span className="extrinsic-method">{ext.section}.{ext.method}</span>
+                      {ext.signer ? (
+                        <span className="extrinsic-badge signed">Signed</span>
+                      ) : (
+                        <span className="extrinsic-badge unsigned">Unsigned</span>
                       )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    
+                    {ext.signer && (
+                      <div className="extrinsic-detail">
+                        <span className="extrinsic-detail-label">Signer</span>
+                        <span className="extrinsic-detail-value">{ext.signer}</span>
+                      </div>
+                    )}
+                    
+                    {ext.args && (
+                      <div className="extrinsic-detail">
+                        <span className="extrinsic-detail-label">Arguments</span>
+                        <span className="extrinsic-detail-value">{ext.args || '(none)'}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
-            {/* Navigation */}
-            <div className="block-navigation">
-              {block.number > 1 && (
-                <button onClick={() => navigate(`/block/${block.number - 1}`)}>
-                  &larr; Block #{block.number - 1}
-                </button>
-              )}
-              <button onClick={() => navigate(`/block/${block.number + 1}`)}>
-                Block #{block.number + 1} &rarr;
+          <div className="details-nav">
+            {block.number > 1 && (
+              <button className="nav-btn" onClick={() => navigate(`/block/${block.number - 1}`)}>
+                <span>←</span>
+                <span>Block #{block.number - 1}</span>
               </button>
-            </div>
-          </>
-        ) : null}
-      </main>
+            )}
+            <button className="nav-btn" onClick={() => navigate(`/block/${block.number + 1}`)}>
+              <span>Block #{block.number + 1}</span>
+              <span>→</span>
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

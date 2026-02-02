@@ -16,7 +16,6 @@ interface Reputation {
   burnCount: number;
   receiveCount: number;
   firstActivity: number;
-  // New fields
   weightedReceived: string;
   uniqueRecipientsCount: number;
   claimStreak: number;
@@ -55,22 +54,18 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [blockNumber, setBlockNumber] = useState<number>(0);
   
-  // UBI State
   const [balance, setBalance] = useState<TokenBatch[]>([]);
   const [totalBalance, setTotalBalance] = useState<string>('0');
   const [claimableAmount, setClaimableAmount] = useState<string>('0');
   const [canClaim, setCanClaim] = useState(false);
   const [reputation, setReputation] = useState<Reputation | null>(null);
   
-  // Burn form
   const [burnRecipient, setBurnRecipient] = useState('');
   const [burnAmount, setBurnAmount] = useState('');
   
-  // Status
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Blockchain explorer state
   const [recentBlocks, setRecentBlocks] = useState<BlockInfo[]>([]);
   const [recentEvents, setRecentEvents] = useState<ChainEvent[]>([]);
   const [chainStats, setChainStats] = useState<ChainStats>({
@@ -83,12 +78,10 @@ function App() {
   const lastBlockTimeRef = useRef<number>(Date.now());
   const blockTimesRef = useRef<number[]>([]);
 
-  // Fetch historical blocks and events from chain
   const fetchHistoricalData = useCallback(async (api: ApiPromise, currentBlock: number) => {
     const blocks: BlockInfo[] = [];
     const events: ChainEvent[] = [];
     
-    // Fetch last 50 blocks to find events (they may be sparse)
     const startBlock = Math.max(1, currentBlock - 49);
     
     console.log(`Fetching blocks ${startBlock} to ${currentBlock}`);
@@ -99,7 +92,6 @@ function App() {
         const signedBlock = await api.rpc.chain.getBlock(blockHash);
         const header = signedBlock.block.header;
         
-        // Only keep last 8 blocks for display
         if (blocks.length < 8) {
           blocks.push({
             number: blockNum,
@@ -110,11 +102,10 @@ function App() {
           });
         }
         
-        // Get events for this block
         const apiAt = await api.at(blockHash);
         const blockEvents = await apiAt.query.system.events();
         
-        blockEvents.forEach((record: any) => {
+        (blockEvents as unknown as Array<{ event: { section: string; method: string; data: { toString(): string } } }>).forEach((record) => {
           const { event } = record;
           console.log(`Block ${blockNum} event: ${event.section}.${event.method}`);
           if (event.section === 'ubiToken') {
@@ -138,7 +129,6 @@ function App() {
     setRecentEvents(events.slice(0, 10));
   }, []);
 
-  // Connect to node
   useEffect(() => {
     const connect = async () => {
       try {
@@ -149,32 +139,26 @@ function App() {
         setConnected(true);
         setStatus('Connected to NST node');
         
-        // Get current block and fetch historical data
         const currentHeader = await api.rpc.chain.getHeader();
         const currentBlock = currentHeader.number.toNumber();
         setBlockNumber(currentBlock);
         
-        // Fetch historical blocks and events
         await fetchHistoricalData(api, currentBlock);
         
-        // Subscribe to new blocks
         await api.rpc.chain.subscribeNewHeads(async (header) => {
           const blockNum = header.number.toNumber();
           setBlockNumber(blockNum);
           
-          // Calculate block time
           const now = Date.now();
           const timeDiff = (now - lastBlockTimeRef.current) / 1000;
           lastBlockTimeRef.current = now;
           
-          // Keep last 10 block times for average
           blockTimesRef.current.push(timeDiff);
           if (blockTimesRef.current.length > 10) {
             blockTimesRef.current.shift();
           }
           const avgBlockTime = blockTimesRef.current.reduce((a, b) => a + b, 0) / blockTimesRef.current.length;
           
-          // Get block details
           const blockHash = header.hash.toHex();
           const signedBlock = await api.rpc.chain.getBlock(blockHash);
           const extrinsicsCount = signedBlock.block.extrinsics.length;
@@ -188,19 +172,17 @@ function App() {
           };
           
           setRecentBlocks(prev => {
-            // Prevent duplicates
             if (prev.some(b => b.number === newBlock.number)) {
               return prev;
             }
             return [newBlock, ...prev].slice(0, 8);
           });
           
-          // Get events for this block
           const apiAt = await api.at(blockHash);
           const events = await apiAt.query.system.events();
           
           const blockEvents: ChainEvent[] = [];
-          events.forEach((record: any) => {
+          (events as unknown as Array<{ event: { section: string; method: string; data: { toString(): string } } }>).forEach((record) => {
             const { event } = record;
             // Filter for interesting events (UBI token events)
             if (event.section === 'ubiToken') {
@@ -218,7 +200,6 @@ function App() {
             setRecentEvents(prev => [...blockEvents, ...prev].slice(0, 10));
           }
           
-          // Update chain stats
           try {
             const totalSupply = await api.query.ubiToken.totalSupply();
             const finalizedHead = await api.rpc.chain.getFinalizedHead();
@@ -241,7 +222,6 @@ function App() {
     connect();
   }, [fetchHistoricalData]);
 
-  // Connect wallet
   const connectWallet = async () => {
     try {
       setStatus('Connecting wallet...');
@@ -264,18 +244,16 @@ function App() {
     }
   };
 
-  // Fetch account data
   const fetchAccountData = useCallback(async () => {
     if (!api || !selectedAccount || blockNumber === 0) return;
     
     try {
       console.log('Fetching data for account:', selectedAccount, 'at block:', blockNumber);
       
-      // Get token batches
       const balances = await api.query.ubiToken.balances(selectedAccount);
-      const batchesRaw = balances.toJSON() as any[];
+      const batchesRaw = balances.toJSON() as unknown[];
       console.log('Raw balances:', JSON.stringify(batchesRaw, null, 2));
-      const batches: TokenBatch[] = batchesRaw?.map((b: any) => {
+      const batches: TokenBatch[] = (batchesRaw as Array<{ amount?: string; 0?: string; expiresAt?: number; expires_at?: number; 1?: number }>)?.map((b) => {
         console.log('Batch item:', b);
         return {
           amount: (b.amount ?? b[0] ?? '0').toString(),
@@ -285,41 +263,53 @@ function App() {
       console.log('Parsed batches:', batches);
       setBalance(batches);
       
-      // Calculate total valid balance
       const total = batches
         .filter(b => b.expiresAtBlock > blockNumber)
         .reduce((sum, b) => sum + BigInt(b.amount), BigInt(0));
       setTotalBalance(total.toString());
       
-      // Check if can claim by reading LastClaim storage
-      // User can claim if they haven't claimed in the current period
       const lastClaimBlock = await api.query.ubiToken.lastClaim(selectedAccount);
       const lastClaim = lastClaimBlock.toJSON() as number | null;
       console.log('Last claim block:', lastClaim);
       
-      // Get claim period from constants (default 10 blocks in dev)
-      const claimPeriod = 10; // TODO: read from runtime constants
+      const claimPeriod = 10;
       
       if (lastClaim === null) {
-        // Never claimed before - can claim
         console.log('Never claimed - can claim now');
         setCanClaim(true);
-        setClaimableAmount((100 * 10**9).toString()); // 100 tokens with 9 decimals
+        setClaimableAmount((100 * 10**9).toString());
       } else {
-        // Check if enough blocks have passed
         const blocksSinceClaim = blockNumber - lastClaim;
         const periodsClaimable = Math.floor(blocksSinceClaim / claimPeriod);
         const canClaimNow = periodsClaimable > 0;
         console.log('Blocks since claim:', blocksSinceClaim, 'Periods claimable:', periodsClaimable);
         setCanClaim(canClaimNow);
-        // Cap at 3 periods (max backlog)
         const periods = Math.min(periodsClaimable, 3);
         setClaimableAmount((periods * 100 * 10**9).toString());
       }
       
-      // Get reputation
       const rep = await api.query.ubiToken.reputationStore(selectedAccount);
-      const repJson = rep.toJSON() as any;
+      const repJson = rep.toJSON() as {
+        score?: number;
+        weightedReceived?: number;
+        weighted_received?: number;
+        burnsSentVolume?: number;
+        burns_sent_volume?: number;
+        burnsReceivedVolume?: number;
+        burns_received_volume?: number;
+        burnsSentCount?: number;
+        burns_sent_count?: number;
+        burnsReceivedCount?: number;
+        burns_received_count?: number;
+        firstActivity?: number;
+        first_activity?: number;
+        uniqueRecipientsCount?: number;
+        unique_recipients_count?: number;
+        claimStreak?: number;
+        claim_streak?: number;
+        lastClaimPeriod?: number;
+        last_claim_period?: number;
+      } | null;
       console.log('Reputation raw:', JSON.stringify(repJson, null, 2));
       if (repJson) {
         const score = repJson.score ?? 0;
@@ -331,7 +321,6 @@ function App() {
           burnCount: repJson.burnsSentCount ?? repJson.burns_sent_count ?? 0,
           receiveCount: repJson.burnsReceivedCount ?? repJson.burns_received_count ?? 0,
           firstActivity: repJson.firstActivity ?? repJson.first_activity ?? 0,
-          // New fields
           weightedReceived: weightedReceived.toString(),
           uniqueRecipientsCount: repJson.uniqueRecipientsCount ?? repJson.unique_recipients_count ?? 0,
           claimStreak: repJson.claimStreak ?? repJson.claim_streak ?? 0,
@@ -348,7 +337,6 @@ function App() {
     fetchAccountData();
   }, [fetchAccountData]);
 
-  // Claim UBI (FREE - unsigned transaction, no wallet signature needed)
   const claimUBI = async () => {
     if (!api || !selectedAccount) return;
     
@@ -356,32 +344,28 @@ function App() {
     setStatus('Claiming UBI...');
     
     try {
-      // Create the call
       const tx = api.tx.ubiToken.claim(selectedAccount);
       console.log('TX hex:', tx.toHex());
       console.log('TX method:', tx.method.toHex());
       
-      // Submit unsigned extrinsic via RPC
       const hash = await api.rpc.author.submitExtrinsic(tx.toHex());
       console.log('Submitted hash:', hash.toHex());
       setStatus(`Claim submitted with hash: ${hash.toHex()}`);
       
-      // Wait a bit and refresh
       setTimeout(() => {
         fetchAccountData();
         setLoading(false);
         setStatus('Claim processed!');
       }, 6000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Claim error:', err);
-      console.error('Error message:', err?.message);
-      console.error('Error data:', err?.data);
-      setStatus(`Claim failed: ${err?.message || err}`);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error('Error message:', errorMessage);
+      setStatus(`Claim failed: ${errorMessage}`);
       setLoading(false);
     }
   };
 
-  // Burn tokens (FREE - unsigned transaction, no wallet signature needed)
   const burnTokens = async () => {
     if (!api || !selectedAccount || !burnRecipient || !burnAmount) return;
     
@@ -389,17 +373,14 @@ function App() {
     setStatus('Burning tokens...');
     
     try {
-      const amount = BigInt(burnAmount) * BigInt(10 ** 9); // 9 decimals
+      const amount = BigInt(burnAmount) * BigInt(10 ** 9);
       
-      // Create unsigned extrinsic and submit directly
       const tx = api.tx.ubiToken.burn(selectedAccount, burnRecipient, amount.toString());
       const extrinsic = api.createType('Extrinsic', tx);
       
-      // Submit unsigned extrinsic via RPC
       const hash = await api.rpc.author.submitExtrinsic(extrinsic);
       setStatus(`Burn submitted with hash: ${hash.toHex()}`);
       
-      // Wait a bit and refresh
       setTimeout(() => {
         fetchAccountData();
         setBurnRecipient('');
@@ -416,14 +397,12 @@ function App() {
 
   const formatTokens = (amount: string) => {
     const num = BigInt(amount);
-    const whole = num / BigInt(10 ** 9); // 9 decimals
+    const whole = num / BigInt(10 ** 9);
     return whole.toString();
   };
 
-  // Get on-chain reputation score (now calculated by the pallet)
   const getReputationScore = (rep: Reputation): number => {
     try {
-      // Handle both string and number formats
       const scoreValue = rep.score;
       if (typeof scoreValue === 'string') {
         return Number(scoreValue) || 0;
@@ -434,7 +413,6 @@ function App() {
     }
   };
 
-  // Get reputation label based on score
   const getReputationLabel = (score: number): string => {
     if (score === 0) return 'Newcomer';
     if (score < 100) return 'Getting Started';
@@ -446,12 +424,10 @@ function App() {
     return 'Legend';
   };
 
-  // Format hash for display
   const formatHash = (hash: string): string => {
     return `${hash.slice(0, 10)}...${hash.slice(-8)}`;
   };
 
-  // Format time ago
   const formatTimeAgo = (timestamp: number): string => {
     const seconds = Math.floor((Date.now() - timestamp) / 1000);
     if (seconds < 60) return `${seconds}s ago`;
@@ -461,10 +437,9 @@ function App() {
     return `${hours}h ago`;
   };
 
-  // Format event data for display
   const formatEventData = (method: string, data: string): string => {
     try {
-      const parts = data.replace(/[\[\]]/g, '').split(',').map(s => s.trim());
+      const parts = data.replace(/[[\]]/g, '').split(',').map(s => s.trim());
       switch (method) {
         case 'Claimed':
           return `${formatHash(parts[0])} claimed ${formatTokens(parts[1])} NST`;
@@ -481,27 +456,31 @@ function App() {
   };
 
   return (
-    <div className="container">
-      <header>
-        <h1>NST Wallet</h1>
-        <p className="subtitle">Non Speculative Tokens - Burn-Only UBI</p>
+    <div className="app-container">
+      <header className="app-header">
+        <h1 className="app-title">NST Wallet</h1>
+        <p className="app-subtitle">Non-Speculative Tokens • Burn-Only UBI</p>
       </header>
 
       <div className="status-bar">
-        <span className={`connection ${connected ? 'connected' : ''}`}>
-          {connected ? 'Connected' : 'Disconnected'}
-        </span>
-        <span className="block">Block: #{blockNumber}</span>
+        <div className="connection-status">
+          <span className={`status-indicator ${connected ? 'connected' : ''}`} />
+          <span>{connected ? 'Connected to Node' : 'Disconnected'}</span>
+        </div>
+        <span className="block-counter">Block #{blockNumber.toLocaleString()}</span>
       </div>
 
       {!selectedAccount ? (
-        <button className="connect-btn" onClick={connectWallet}>
-          Connect Wallet
-        </button>
+        <div className="wallet-connect">
+          <div className="wallet-icon">+</div>
+          <button className="btn btn-primary btn-full" onClick={connectWallet}>
+            Connect Wallet
+          </button>
+        </div>
       ) : (
         <>
           <div className="account-selector">
-            <label>Account:</label>
+            <label>Account</label>
             <select 
               value={selectedAccount} 
               onChange={(e) => setSelectedAccount(e.target.value)}
@@ -514,114 +493,128 @@ function App() {
             </select>
           </div>
 
-          <div className="card balance-card">
-            <h2>Your Balance</h2>
-            <div className="balance-amount">{formatTokens(totalBalance)} NST</div>
-            <div className="balance-detail">
-              {balance.filter(b => b.expiresAtBlock > blockNumber).length} active batch(es)
+          <div className="dashboard-grid">
+            <div className="card balance-card">
+              <h2 className="card-title">Your Balance</h2>
+              <div className="balance-display">
+                <div className="balance-amount">{formatTokens(totalBalance)}</div>
+                <span className="balance-unit">NST</span>
+                <div className="balance-meta">
+                  {balance.filter(b => b.expiresAtBlock > blockNumber).length} active batch(es)
+                </div>
+              </div>
+              
+              {balance.length > 0 && (
+                <div className="batches-list">
+                  <div className="batches-title">Token Batches</div>
+                  {balance.map((batch, i) => (
+                    <div 
+                      key={i} 
+                      className={`batch-item ${batch.expiresAtBlock <= blockNumber ? 'expired' : ''}`}
+                    >
+                      <span className="batch-amount">{formatTokens(batch.amount)} NST</span>
+                      <span className="batch-expiry">
+                        {batch.expiresAtBlock <= blockNumber 
+                          ? 'EXPIRED' 
+                          : `Expires #${batch.expiresAtBlock.toLocaleString()}`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            
-            {balance.length > 0 && (
-              <div className="batches">
-                <h4>Token Batches:</h4>
-                {balance.map((batch, i) => (
-                  <div 
-                    key={i} 
-                    className={`batch ${batch.expiresAtBlock <= blockNumber ? 'expired' : ''}`}
-                  >
-                    <span>{formatTokens(batch.amount)} NST</span>
-                    <span className="expires">
-                      {batch.expiresAtBlock <= blockNumber 
-                        ? 'EXPIRED' 
-                        : `Expires block #${batch.expiresAtBlock}`}
-                    </span>
+
+            <div className="card claim-card">
+              <h2 className="card-title">Claim UBI</h2>
+              <div className="claim-section">
+                <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+                  Receive 100 NST/day (expires in 7 days)
+                </p>
+                <div className="claim-info">
+                  <span>Claimable:</span>
+                  <span className="claim-amount">{formatTokens(claimableAmount)} NST</span>
+                </div>
+                <button 
+                  onClick={claimUBI} 
+                  disabled={!canClaim || loading}
+                  className="btn btn-primary btn-full"
+                >
+                  {loading ? 'Processing...' : canClaim ? 'Claim Now' : 'Already Claimed Today'}
+                </button>
+              </div>
+            </div>
+
+            <div className="card burn-card">
+              <h2 className="card-title">Burn Tokens</h2>
+              <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+                Send tokens to someone (tokens are destroyed, recipient sees event)
+              </p>
+              <div className="form-group">
+                <label className="form-label">Recipient Address</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={burnRecipient}
+                  onChange={(e) => setBurnRecipient(e.target.value)}
+                  placeholder="5GrwvaEF5zXb26Fz..."
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Amount (NST)</label>
+                <input
+                  type="number"
+                  className="form-input"
+                  value={burnAmount}
+                  onChange={(e) => setBurnAmount(e.target.value)}
+                  placeholder="10"
+                  min="1"
+                />
+              </div>
+              <button 
+                onClick={burnTokens} 
+                disabled={!burnRecipient || !burnAmount || loading}
+                className="btn btn-danger btn-full"
+              >
+                {loading ? 'Processing...' : 'Burn Tokens'}
+              </button>
+            </div>
+
+            {reputation && (
+              <div className="card reputation-card">
+                <h2 className="card-title">Your Reputation</h2>
+                <div className="reputation-header">
+                  <div className="reputation-score">{getReputationScore(reputation)}</div>
+                  <div className="reputation-label">{getReputationLabel(getReputationScore(reputation))}</div>
+                </div>
+                <div className="reputation-grid">
+                  <div className="reputation-stat">
+                    <span className="stat-value">{reputation.claimStreak}</span>
+                    <span className="stat-name">Claim Streak</span>
                   </div>
-                ))}
+                  <div className="reputation-stat">
+                    <span className="stat-value">{reputation.uniqueRecipientsCount}</span>
+                    <span className="stat-name">Unique Recipients</span>
+                  </div>
+                  <div className="reputation-stat">
+                    <span className="stat-value">{formatTokens(reputation.totalBurned)}</span>
+                    <span className="stat-name">Total Burned</span>
+                  </div>
+                  <div className="reputation-stat">
+                    <span className="stat-value">{formatTokens(reputation.weightedReceived)}</span>
+                    <span className="stat-name">Weighted Received</span>
+                  </div>
+                  <div className="reputation-stat">
+                    <span className="stat-value">{reputation.burnCount}</span>
+                    <span className="stat-name">Burns Made</span>
+                  </div>
+                  <div className="reputation-stat">
+                    <span className="stat-value">{reputation.receiveCount}</span>
+                    <span className="stat-name">Burns Received</span>
+                  </div>
+                </div>
               </div>
             )}
           </div>
-
-          <div className="card claim-card">
-            <h2>Claim UBI</h2>
-            <p>Receive 100 NST/day (expires in 7 days) - FREE, no gas fees!</p>
-            <div className="claim-info">
-              <span>Claimable: {formatTokens(claimableAmount)} NST</span>
-            </div>
-            <button 
-              onClick={claimUBI} 
-              disabled={!canClaim || loading}
-              className="action-btn"
-            >
-              {loading ? 'Processing...' : canClaim ? 'Claim Now' : 'Already Claimed Today'}
-            </button>
-          </div>
-
-          <div className="card burn-card">
-            <h2>Burn Tokens</h2>
-            <p>Send tokens to someone (tokens are destroyed, recipient sees event) - FREE!</p>
-            <div className="form-group">
-              <label>Recipient Address:</label>
-              <input
-                type="text"
-                value={burnRecipient}
-                onChange={(e) => setBurnRecipient(e.target.value)}
-                placeholder="5GrwvaEF5zXb26Fz..."
-              />
-            </div>
-            <div className="form-group">
-              <label>Amount (NST):</label>
-              <input
-                type="number"
-                value={burnAmount}
-                onChange={(e) => setBurnAmount(e.target.value)}
-                placeholder="10"
-                min="1"
-              />
-            </div>
-            <button 
-              onClick={burnTokens} 
-              disabled={!burnRecipient || !burnAmount || loading}
-              className="action-btn burn-btn"
-            >
-              {loading ? 'Processing...' : 'Burn Tokens'}
-            </button>
-          </div>
-
-          {reputation && (
-            <div className="card reputation-card">
-              <h2>Your Reputation</h2>
-              <div className="reputation-score">
-                <span className="score-value">{getReputationScore(reputation)}</span>
-                <span className="score-label">{getReputationLabel(getReputationScore(reputation))}</span>
-              </div>
-              <div className="rep-grid">
-                <div className="rep-item">
-                  <span className="rep-value">{reputation.claimStreak}</span>
-                  <span className="rep-label">Claim Streak</span>
-                </div>
-                <div className="rep-item">
-                  <span className="rep-value">{reputation.uniqueRecipientsCount}</span>
-                  <span className="rep-label">Unique Recipients</span>
-                </div>
-                <div className="rep-item">
-                  <span className="rep-value">{formatTokens(reputation.totalBurned)}</span>
-                  <span className="rep-label">Total Burned</span>
-                </div>
-                <div className="rep-item">
-                  <span className="rep-value">{formatTokens(reputation.weightedReceived)}</span>
-                  <span className="rep-label">Weighted Received</span>
-                </div>
-                <div className="rep-item">
-                  <span className="rep-value">{reputation.burnCount}</span>
-                  <span className="rep-label">Burns Made</span>
-                </div>
-                <div className="rep-item">
-                  <span className="rep-value">{reputation.receiveCount}</span>
-                  <span className="rep-label">Burns Received</span>
-                </div>
-              </div>
-            </div>
-          )}
         </>
       )}
 
@@ -631,51 +624,50 @@ function App() {
         </div>
       )}
 
-      {/* Blockchain Explorer Section */}
-      <div className="explorer-section">
+      <div className="explorer-card">
         <div className="explorer-header" onClick={() => setShowExplorer(!showExplorer)}>
-          <h2>Blockchain Explorer</h2>
-          <span className="toggle-icon">{showExplorer ? '−' : '+'}</span>
+          <h2 className="explorer-title">Blockchain Explorer</h2>
+          <span className={`explorer-toggle ${showExplorer ? 'open' : ''}`}>+</span>
         </div>
         
         {showExplorer && (
           <>
-            {/* Chain Stats */}
             <div className="chain-stats">
-              <div className="stat-item">
-                <span className="stat-value">{blockNumber}</span>
-                <span className="stat-label">Current Block</span>
+              <div className="chain-stat">
+                <span className="chain-stat-value">{blockNumber.toLocaleString()}</span>
+                <span className="chain-stat-label">Current Block</span>
               </div>
-              <div className="stat-item">
-                <span className="stat-value">{chainStats.finalizedBlock}</span>
-                <span className="stat-label">Finalized</span>
+              <div className="chain-stat">
+                <span className="chain-stat-value">{chainStats.finalizedBlock.toLocaleString()}</span>
+                <span className="chain-stat-label">Finalized</span>
               </div>
-              <div className="stat-item">
-                <span className="stat-value">{formatTokens(chainStats.totalSupply)}</span>
-                <span className="stat-label">Total Supply (NST)</span>
+              <div className="chain-stat">
+                <span className="chain-stat-value">{formatTokens(chainStats.totalSupply)}</span>
+                <span className="chain-stat-label">Total Supply (NST)</span>
               </div>
-              <div className="stat-item">
-                <span className="stat-value">{chainStats.avgBlockTime}s</span>
-                <span className="stat-label">Avg Block Time</span>
+              <div className="chain-stat">
+                <span className="chain-stat-value">{chainStats.avgBlockTime}s</span>
+                <span className="chain-stat-label">Avg Block Time</span>
               </div>
             </div>
 
-            {/* Recent Blocks - Visual Chain */}
-            <div className="explorer-panel">
-              <h3>Recent Blocks</h3>
+            <div className="blocks-visual">
               <div className="blocks-chain">
                 {recentBlocks.length === 0 ? (
-                  <div className="empty-state">Waiting for blocks...</div>
+                  <div className="empty-state">
+                    <div className="empty-state-icon">—</div>
+                    <div>Waiting for blocks...</div>
+                  </div>
                 ) : (
                   recentBlocks.slice().reverse().map((block, index, arr) => (
-                    <div key={block.hash} className={`block-chain-item ${index === 0 ? 'oldest' : ''} ${index === arr.length - 1 ? 'newest' : ''}`}>
-                      {index > 0 && <div className="chain-connector" />}
+                    <div key={block.hash} className="block-node">
+                      {index > 0 && <div className="chain-link" />}
                       <div 
                         className={`block-cube ${index === arr.length - 1 ? 'latest' : ''}`}
                         onClick={() => navigate(`/block/${block.number}`)}
                       >
-                        <div className="cube-number">{block.number}</div>
-                        <div className="cube-txs">{block.extrinsicsCount} tx</div>
+                        <div className="block-number">#{block.number.toLocaleString()}</div>
+                        <div className="block-txs">{block.extrinsicsCount} tx</div>
                       </div>
                     </div>
                   ))
@@ -683,21 +675,25 @@ function App() {
               </div>
             </div>
 
-            {/* Recent Activity */}
-            <div className="explorer-panel">
-              <h3>Recent Activity</h3>
+            <div className="events-panel">
+              <div className="events-title">Recent Activity</div>
               <div className="events-list">
                 {recentEvents.length === 0 ? (
-                  <div className="empty-state">No recent UBI token activity</div>
+                  <div className="empty-state">
+                    <div className="empty-state-icon">—</div>
+                    <div>No recent UBI token activity</div>
+                  </div>
                 ) : (
                   recentEvents.map((event, i) => (
                     <div key={`${event.blockNumber}-${i}`} className="event-item">
-                      <div className={`event-type ${event.method.toLowerCase()}`}>
+                      <div className={`event-badge ${event.method.toLowerCase()}`}>
                         {event.method}
                       </div>
-                      <div className="event-details">
-                        <span className="event-data">{formatEventData(event.method, event.data)}</span>
-                        <span className="event-meta">Block #{event.blockNumber} · {formatTimeAgo(event.timestamp)}</span>
+                      <div className="event-content">
+                        <div className="event-description">{formatEventData(event.method, event.data)}</div>
+                        <div className="event-meta">
+                          Block #{event.blockNumber.toLocaleString()} • {formatTimeAgo(event.timestamp)}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -708,9 +704,9 @@ function App() {
         )}
       </div>
 
-      <footer>
-        <p>NST - Non Speculative Tokens</p>
-        <p className="small">Tokens cannot be transferred, only burned. No speculation possible. All transactions are FREE!</p>
+      <footer className="app-footer">
+        <p className="footer-text">NST - Non Speculative Tokens</p>
+        <p className="footer-tagline">Tokens cannot be transferred, only burned. No speculation possible.</p>
       </footer>
     </div>
   );
